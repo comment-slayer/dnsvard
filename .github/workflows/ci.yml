@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: Test and Vet (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [blacksmith-4vcpu-ubuntu-2404, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Guard test global stdio mutation
+        run: ./scripts/check-no-global-stdio-in-tests.sh
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build CLI
+        run: go build ./cmd/dnsvard
+
+  race:
+    name: Race Tests (linux)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Guard test global stdio mutation
+        run: ./scripts/check-no-global-stdio-in-tests.sh
+
+      - name: Run race tests
+        run: go test -race ./...
+
+  linux-harness-dry-run:
+    name: Linux Harness (dry run)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build dnsvard binary
+        run: |
+          mkdir -p bin
+          go build -o bin/dnsvard ./cmd/dnsvard
+
+      - name: Run Linux bootstrap harness dry-run
+        env:
+          DNSVARD_BIN: ./bin/dnsvard
+          DNSVARD_LINUX_CLEANUP_RESOLVER: "0"
+        run: |
+          set -eu
+          if [ ! -f scripts/test-linux-bootstrap.sh ]; then
+            printf 'warning: scripts/test-linux-bootstrap.sh is missing; skipping Linux harness dry-run\n' >&2
+            exit 0
+          fi
+
+          bash scripts/test-linux-bootstrap.sh
+
+  release-config:
+    name: GoReleaser Check
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run GoReleaser check
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

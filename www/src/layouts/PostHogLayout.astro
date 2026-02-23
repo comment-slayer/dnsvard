@@ -1,0 +1,44 @@
+---
+import PostHog from '../components/posthog.astro';
+
+interface Props {
+  pageTitle: string;
+  pageDescription: string;
+  canonicalURL: string;
+  structuredData: Record<string, unknown>;
+}
+
+const { pageTitle, pageDescription, canonicalURL, structuredData } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={pageDescription} />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="canonical" href={canonicalURL} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={pageDescription} />
+    <meta property="og:url" content={canonicalURL} />
+    <meta property="og:site_name" content="dnsvard" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={pageDescription} />
+    <script
+      type="application/ld+json"
+      is:inline
+      set:html={JSON.stringify(structuredData)}
+    />
+    <PostHog />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>

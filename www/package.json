@@ -1,0 +1,26 @@
+{
+  "name": "dnsvard-site",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "sh -c 'if command -v dnsvard >/dev/null 2>&1; then exec dnsvard run --astro -- astro dev; else exec astro dev; fi'",
+    "dev:naked": "astro dev",
+    "build": "astro build",
+    "preview": "dnsvard run --astro -- astro preview",
+    "preview:naked": "astro preview",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/node": "^25.3.3",
+    "astro": "^5.18.0",
+    "oxfmt": "^0.36.0",
+    "oxlint": "^1.51.0",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.9.3"
+  }
+}

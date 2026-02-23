@@ -1,0 +1,124 @@
+const INSTALLER_BASE_URL = "${installer_base_url}";
+const ENABLE_GITHUB_FALLBACK = ${enable_github_fallback};
+const OWNER = "${github_owner}";
+const REPO = "${github_repo}";
+const LATEST_RE = /^\/install\/?$/;
+const LATEST_POINTER_RE = /^\/LATEST\/?$/;
+const VERSION_RE = /^\/(v\d+\.\d+\.\d+)\/install\/?$/;
+const VERSIONED_ARTIFACT_RE = /^\/v[^/].*$/;
+
+function buildHeaders(cacheControl, upstreamHeaders) {
+  const headers = new Headers();
+  const passthrough = [
+    "content-type",
+    "content-length",
+    "content-disposition",
+    "etag",
+    "last-modified",
+    "accept-ranges",
+  ];
+
+  if (upstreamHeaders) {
+    for (const key of passthrough) {
+      const value = upstreamHeaders.get(key);
+      if (value) {
+        headers.set(key, value);
+      }
+    }
+  }
+
+  headers.set("cache-control", cacheControl);
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("strict-transport-security", "max-age=31536000; includeSubDomains; preload");
+  headers.set("referrer-policy", "no-referrer");
+  return headers;
+}
+
+async function proxyScript(url, cacheTtl, cacheControl) {
+  const upstream = await fetch(url, {
+    cf: { cacheTtl: cacheTtl, cacheEverything: true },
+    redirect: "follow",
+  });
+
+  if (!upstream.ok) {
+    return new Response("upstream installer fetch failed\n", {
+      status: 502,
+      headers: buildHeaders("no-store"),
+    });
+  }
+
+  return new Response(upstream.body, {
+    status: 200,
+    headers: buildHeaders(cacheControl, upstream.headers),
+  });
+}
+
+async function fetchFromSources(primaryUrl, fallbackUrl, cacheTtl, cacheControl) {
+  const primary = await proxyScript(primaryUrl, cacheTtl, cacheControl);
+  if (primary.status === 200) {
+    return primary;
+  }
+
+  if (!ENABLE_GITHUB_FALLBACK) {
+    return primary;
+  }
+
+  return proxyScript(fallbackUrl, cacheTtl, cacheControl);
+}
+
+async function handleRequest(request) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("method not allowed\n", {
+      status: 405,
+      headers: buildHeaders("no-store"),
+    });
+  }
+
+  const url = new URL(request.url);
+  const pathname = url.pathname;
+
+  if (LATEST_RE.test(pathname)) {
+    return fetchFromSources(
+      INSTALLER_BASE_URL + "/install.sh",
+      "https://raw.githubusercontent.com/" + OWNER + "/" + REPO + "/master/install.sh",
+      60,
+      "public, max-age=60"
+    );
+  }
+
+  const match = pathname.match(VERSION_RE);
+  if (match) {
+    const version = match[1];
+    return fetchFromSources(
+      INSTALLER_BASE_URL + "/" + version + "/install.sh",
+      "https://raw.githubusercontent.com/" + OWNER + "/" + REPO + "/" + version + "/install.sh",
+      31536000,
+      "public, max-age=31536000, immutable"
+    );
+  }
+
+  if (LATEST_POINTER_RE.test(pathname)) {
+    return proxyScript(
+      INSTALLER_BASE_URL + "/LATEST",
+      60,
+      "public, max-age=60"
+    );
+  }
+
+  if (VERSIONED_ARTIFACT_RE.test(pathname)) {
+    return proxyScript(
+      INSTALLER_BASE_URL + pathname,
+      31536000,
+      "public, max-age=31536000, immutable"
+    );
+  }
+
+  return new Response("not found\n", {
+    status: 404,
+    headers: buildHeaders("no-store"),
+  });
+}
+
+addEventListener("fetch", function(event) {
+  event.respondWith(handleRequest(event.request));
+});

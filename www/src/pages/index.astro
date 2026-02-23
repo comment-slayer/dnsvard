@@ -1,0 +1,104 @@
+---
+import InstallMethodSwitcher from '../components/install-method-switcher.astro';
+import PostHogLayout from '../layouts/PostHogLayout.astro';
+import '../styles.css';
+
+const pageTitle = 'dnsvard | Install';
+const pageDescription =
+  'Install dnsvard for stable local hostnames in development.';
+const canonicalURL = 'https://dnsvard.com/';
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'dnsvard',
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'macOS, Linux',
+  url: canonicalURL,
+  codeRepository: 'https://github.com/comment-slayer/dnsvard',
+  description: pageDescription,
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD',
+  },
+};
+
+const architectureDiagram = `
+  Browser / curl
+       |
+       | *.<suffix>
+       v
+ +-----------------------+
+ | system resolver       |
+ | -> 127.0.0.1:1053     |
+ +-----------+-----------+
+             |
+             v
+     +-------+--------+
+     | dnsvard daemon |
+     | DNS + HTTP/TCP |
+     +---+--------+---+
+         |        |
+         | DNS    | HTTP/TCP proxy
+         v        v
+  workspace IP  containers
+`;
+---
+
+<PostHogLayout
+  pageTitle={pageTitle}
+  pageDescription={pageDescription}
+  canonicalURL={canonicalURL}
+  structuredData={structuredData}
+>
+    <main class="mx-auto flex min-h-[100svh] w-full items-start justify-center px-[1.1rem] py-8 max-[640px]:px-2 max-[640px]:py-4">
+      <section
+        class="panel-shell w-full max-w-[50rem] p-[1.35rem] text-slate-100 backdrop-blur-[4px] max-[640px]:rounded-[0.5rem] max-[640px]:p-4"
+        aria-labelledby="install-heading"
+      >
+        <div class="mb-2 flex flex-wrap items-center gap-1.5">
+          <span class="chip">macOS</span>
+          <span class="chip">Linux</span>
+          <span class="chip">DNS + HTTP + TCP</span>
+        </div>
+        <h1 id="install-heading" class="hero-title m-0 text-[clamp(1.35rem,3.2vw,2rem)] tracking-[-0.035em]">Install dnsvard</h1>
+        <p class="mb-4 mt-[0.45rem] text-[0.96rem] text-slate-400">
+          Stable local hostnames for development, without localhost port
+          conflicts.
+        </p>
+
+        <InstallMethodSwitcher />
+
+        <section class="section-rule" aria-label="Workload operations">
+          <h2 class="m-0 text-[0.98rem] tracking-[-0.01em] text-slate-200 md:text-[1.05rem]">Operate running stacks</h2>
+          <p class="mb-2 mt-1 text-[0.84rem] text-slate-400 md:mb-3 md:text-[0.88rem]">
+            List active workspaces, stop one workspace, or force-remove an entire project.
+          </p>
+          <div class="command-well w-full max-w-full overflow-x-auto rounded-[0.75rem] p-[0.8rem]">
+            <pre class="m-0 w-max text-left text-[0.74rem] leading-[1.45] text-slate-300 md:text-[0.8rem]"><code><span class="text-slate-500">$</span> dnsvard ps
+<span class="text-slate-500">$</span> dnsvard stop workspace/feat-auth@myproj
+<span class="text-slate-500">$</span> dnsvard rm --force project/myproj</code></pre>
+          </div>
+        </section>
+
+        <section class="section-rule" aria-label="dnsvard architecture">
+          <div class="command-well w-full max-w-full overflow-x-auto rounded-[0.75rem] p-[0.8rem]">
+            <pre class="mx-auto my-0 w-max text-left text-[0.72rem] leading-[1.35] text-slate-300 md:text-[0.78rem]">{architectureDiagram}</pre>
+          </div>
+          <p class="mb-0 mt-2 md:mt-[0.7rem]">
+            <a
+              class="inline-flex items-center gap-[0.42rem] text-white underline decoration-white/70 underline-offset-[0.15rem] hover:decoration-2"
+              href="https://github.com/comment-slayer/dnsvard"
+            >
+              <span class="inline-grid h-[1.35rem] w-[1.35rem] place-items-center" aria-hidden="true">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.1.69-.22.69-.48v-1.7c-2.82.61-3.41-1.2-3.41-1.2a2.69 2.69 0 0 0-1.13-1.5c-.92-.63.07-.62.07-.62a2.13 2.13 0 0 1 1.55 1.05 2.16 2.16 0 0 0 2.95.84 2.15 2.15 0 0 1 .64-1.36c-2.25-.26-4.61-1.12-4.61-4.97a3.89 3.89 0 0 1 1.04-2.71 3.61 3.61 0 0 1 .1-2.67s.85-.27 2.78 1.03a9.57 9.57 0 0 1 5.06 0c1.93-1.3 2.78-1.03 2.78-1.03a3.61 3.61 0 0 1 .1 2.67 3.89 3.89 0 0 1 1.04 2.71c0 3.86-2.36 4.7-4.62 4.96a2.4 2.4 0 0 1 .69 1.87v2.77c0 .27.18.59.7.48A10 10 0 0 0 12 2Z" />
+                </svg>
+              </span>
+              github.com/comment-slayer/dnsvard
+            </a>
+          </p>
+        </section>
+      </section>
+    </main>
+</PostHogLayout>

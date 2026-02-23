@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  goreleaser:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Cosign
+        uses: sigstore/cosign-installer@v4
+
+      - name: Create Homebrew tap app token
+        id: tap-app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: comment-slayer
+          repositories: homebrew-tap
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --parallelism=4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-app-token.outputs.token }}
+          GOMAXPROCS: "1"
+
+      - name: Prepare R2 release payload
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME}"
+          R2_DIR="dist/r2"
+          VERSION_DIR="$R2_DIR/$VERSION"
+
+          mkdir -p "$VERSION_DIR"
+          cp install.sh "$R2_DIR/install.sh"
+          printf '%s\n' "$VERSION" > "$R2_DIR/LATEST"
+
+          cp install.sh "$VERSION_DIR/install.sh"
+
+          cp dist/checksums.txt "$VERSION_DIR/checksums.txt"
+          cp dist/checksums.txt.sigstore.json "$VERSION_DIR/checksums.txt.sigstore.json"
+
+          for artifact in dist/*.tar.gz dist/*.zip; do
+            if [ -f "$artifact" ]; then
+              cp "$artifact" "$VERSION_DIR/"
+            fi
+          done
+
+      - name: Upload immutable versioned artifacts to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME}"
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          for file in dist/r2/"$VERSION"/*; do
+            key="$VERSION/$(basename "$file")"
+            if aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$R2_BUCKET" --key "$key" >/dev/null 2>&1; then
+              printf 'error: immutable object already exists: %s\n' "$key" >&2
+              exit 1
+            fi
+
+            aws --endpoint-url "$ENDPOINT" s3 cp "$file" "s3://$R2_BUCKET/$key" --cache-control "public, max-age=31536000, immutable"
+          done
+
+      - name: Upload mutable latest pointers to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          set -eu
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          aws --endpoint-url "$ENDPOINT" s3 cp dist/r2/install.sh "s3://$R2_BUCKET/install.sh" --cache-control "public, max-age=60" --content-type "text/plain; charset=utf-8"
+          aws --endpoint-url "$ENDPOINT" s3 cp dist/r2/LATEST "s3://$R2_BUCKET/LATEST" --cache-control "public, max-age=60" --content-type "text/plain; charset=utf-8"

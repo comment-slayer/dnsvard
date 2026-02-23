@@ -1,0 +1,11 @@
+bin
+dist
+/dnsvard
+.DS_Store
+*.log
+coverage.out
+
+node_modules
+dist
+.env
+.env.*

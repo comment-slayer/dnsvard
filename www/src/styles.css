@@ -1,0 +1,142 @@
+@import 'tailwindcss';
+
+:root {
+  --site-bg: oklch(14.5% 0.01 260);
+  --site-panel: oklch(18.2% 0.012 258);
+  --site-panel-2: oklch(20.8% 0.01 255);
+  --site-accent: oklch(76% 0.14 150);
+}
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    min-height: 100%;
+    width: 100%;
+  }
+
+  body {
+    color: var(--color-slate-100);
+    font-family:
+      'IBM Plex Mono', 'Azeret Mono', 'JetBrains Mono', 'SFMono-Regular', Menlo,
+      Monaco, Consolas, 'Liberation Mono', monospace;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    background:
+      linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--color-white) 2%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to right,
+        color-mix(in oklab, var(--color-white) 2%, transparent) 1px,
+        transparent 1px
+      ),
+      var(--site-bg);
+    background-size: 22px 22px, 22px 22px, auto;
+    position: relative;
+  }
+
+  @media (max-width: 640px) {
+    body {
+      background: var(--color-slate-900);
+    }
+  }
+}
+
+@layer components {
+  .panel-shell {
+    position: relative;
+    overflow: hidden;
+    border-radius: 1.1rem;
+    border: 1px solid color-mix(in oklab, var(--color-slate-600) 80%, transparent);
+    background:
+      linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--color-white) 3%, transparent),
+        color-mix(in oklab, var(--color-white) 0%, transparent)
+      ),
+      linear-gradient(180deg, var(--site-panel), var(--site-panel-2));
+    box-shadow:
+      0 26px 60px color-mix(in oklab, var(--color-black) 52%, transparent),
+      inset 0 1px 0 color-mix(in oklab, var(--color-white) 10%, transparent);
+  }
+
+  .panel-shell::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: var(--site-accent);
+    opacity: 0.8;
+  }
+
+  .panel-shell::before {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    opacity: 0.14;
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--color-slate-400) 30%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-slate-400) 30%, transparent) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: radial-gradient(circle at center, black 55%, transparent 100%);
+  }
+
+  .section-rule {
+    border-top: 1px solid color-mix(in oklab, var(--color-slate-600) 82%, transparent);
+    padding-top: 0.85rem;
+    margin-top: 0.85rem;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    padding: 0;
+    font-size: 0.68rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--color-slate-300) 94%, transparent);
+  }
+
+  .chip::before {
+    content: '';
+    width: 0.38rem;
+    height: 0.38rem;
+    border-radius: 9999px;
+    background: var(--site-accent);
+    box-shadow: none;
+  }
+
+  .hero-title {
+    position: relative;
+    display: inline-block;
+    color: var(--color-slate-100);
+  }
+
+  .hero-title::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -0.18rem;
+    height: 2px;
+    background: var(--site-accent);
+    opacity: 0.7;
+  }
+
+  .command-well {
+    border: 1px solid color-mix(in oklab, var(--color-slate-600) 82%, transparent);
+    background: color-mix(in oklab, var(--color-slate-950) 97%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, var(--color-white) 4%, transparent),
+      0 10px 24px color-mix(in oklab, var(--color-black) 28%, transparent);
+  }
+}

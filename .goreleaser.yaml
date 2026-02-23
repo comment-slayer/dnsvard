@@ -1,0 +1,78 @@
+version: 2
+
+project_name: dnsvard
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: dnsvard
+    main: ./cmd/dnsvard
+    binary: dnsvard
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: dnsvard-archives
+    ids:
+      - dnsvard
+    name_template: "{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    files:
+      - README.md
+      - docs/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+signs:
+  - id: checksums-keyless
+    artifacts: checksum
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --yes
+      - --bundle=${signature}
+      - ${artifact}
+
+homebrew_casks:
+  - ids:
+      - dnsvard-archives
+    repository:
+      owner: comment-slayer
+      name: homebrew-tap
+      branch: master
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/comment-slayer/dnsvard
+    description: Local development networking daemon for stable hostnames across worktrees
+    license: Apache-2.0
+    binaries:
+      - dnsvard
+
+release:
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
