@@ -38,7 +38,7 @@ func TestLinuxBootstrapVerboseNote(t *testing.T) {
 	if got := c.BootstrapVerboseNote(false, ""); !strings.Contains(got, "non-root") {
 		t.Fatalf("unexpected non-root note: %q", got)
 	}
-	if got := c.BootstrapVerboseNote(true, "steeve"); !strings.Contains(got, "steeve") {
+	if got := c.BootstrapVerboseNote(true, "some-user"); !strings.Contains(got, "some-user") {
 		t.Fatalf("unexpected root note: %q", got)
 	}
 }

@@ -11,7 +11,7 @@ func TestIsGoRunExecutable(t *testing.T) {
 	}{
 		{path: "/var/folders/ab/cd/T/go-build12345/b001/exe/dnsvard", want: true},
 		{path: "/tmp/go-build9876/b001/exe/dnsvard", want: true},
-		{path: "/Users/drblard/.local/bin/dnsvard", want: false},
+		{path: "/Users/some-user/.local/bin/dnsvard", want: false},
 	}
 	for _, tc := range cases {
 		got := isGoRunExecutable(tc.path)

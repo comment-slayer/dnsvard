@@ -514,7 +514,7 @@ func isBrewManagedInstall(exePath string) bool {
 	}
 	for _, p := range paths {
 		normalized := filepath.ToSlash(p)
-		if strings.Contains(normalized, "/Cellar/") || strings.Contains(normalized, "/Homebrew/") || strings.Contains(normalized, "/.linuxbrew/") {
+		if strings.Contains(normalized, "/Cellar/") || strings.Contains(normalized, "/Caskroom/") || strings.Contains(normalized, "/Homebrew/") || strings.Contains(normalized, "/.linuxbrew/") {
 			return true
 		}
 	}

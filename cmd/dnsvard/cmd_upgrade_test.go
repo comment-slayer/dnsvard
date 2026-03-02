@@ -185,3 +185,29 @@ func TestReleaseArchiveNamePreservesVPrefix(t *testing.T) {
 		t.Fatalf("archive name should include v prefix: %q", archive)
 	}
 }
+
+func TestIsBrewManagedInstall(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "brew cellar path", path: "/opt/homebrew/Cellar/dnsvard/0.1.0/bin/dnsvard", want: true},
+		{name: "brew caskroom path", path: "/opt/homebrew/Caskroom/dnsvard/0.1.0/dnsvard", want: true},
+		{name: "linuxbrew path", path: "/home/linuxbrew/.linuxbrew/bin/dnsvard", want: true},
+		{name: "user local install", path: "/Users/some-user/.local/bin/dnsvard", want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := isBrewManagedInstall(tc.path)
+			if got != tc.want {
+				t.Fatalf("isBrewManagedInstall(%q) = %t, want %t", tc.path, got, tc.want)
+			}
+		})
+	}
+}
