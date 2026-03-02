@@ -45,6 +45,11 @@ func InstallOrUpdateLaunchAgent(spec LaunchAgentSpec) (string, error) {
 	if err := os.MkdirAll(spec.StateDir, 0o755); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
+	if os.Geteuid() == 0 && ctx.uid != 0 {
+		if err := os.Chown(spec.StateDir, ctx.uid, ctx.gid); err != nil {
+			return "", fmt.Errorf("set state dir ownership: %w", err)
+		}
+	}
 
 	plistPath := launchAgentPath(ctx)
 	plist := renderPlist(spec)

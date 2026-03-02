@@ -60,13 +60,23 @@ func writeBootstrapStateVersion(stateDir string, version int) error {
 		return errors.New("bootstrap state version must be > 0")
 	}
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		return err
+		return fmt.Errorf("create bootstrap state dir: %w", err)
+	}
+	if err := ownership.ChownPathToSudoInvoker(stateDir); err != nil {
+		return fmt.Errorf("set bootstrap state dir ownership %s: %w", stateDir, err)
 	}
 	b, err := json.MarshalIndent(bootstrapState{Version: version}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(bootstrapStatePath(stateDir), b, 0o644)
+	path := bootstrapStatePath(stateDir)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		return fmt.Errorf("write bootstrap state %s: %w", path, err)
+	}
+	if err := ownership.ChownPathToSudoInvoker(path); err != nil {
+		return fmt.Errorf("set bootstrap state ownership %s: %w", path, err)
+	}
+	return nil
 }
 
 func resolverSyncStatePath(stateDir string) string {
