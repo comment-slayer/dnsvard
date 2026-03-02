@@ -93,13 +93,15 @@ func Load(opts LoadOptions) (Config, error) {
 	cfg := Default()
 
 	globalPath := GlobalConfigPath()
-	localPath := filepath.Join(opts.CWD, opts.LocalName)
+	localPaths := localConfigPathsForMerge(opts.CWD, opts.LocalName)
 
 	if err := loadGlobalYAMLFile(globalPath, &cfg, !opts.SkipGlobalInit); err != nil {
 		return Config{}, err
 	}
-	if err := loadYAMLFile(localPath, &cfg); err != nil {
-		return Config{}, err
+	for _, localPath := range localPaths {
+		if err := loadYAMLFile(localPath, &cfg); err != nil {
+			return Config{}, err
+		}
 	}
 
 	if opts.ExplicitPath != "" {
@@ -440,7 +442,50 @@ func LocalConfigPath(cwd string, explicitPath string) string {
 	if strings.TrimSpace(cwd) == "" {
 		cwd = "."
 	}
+	paths := localConfigPathsForMerge(cwd, DefaultLocalConfigName)
+	if len(paths) > 0 {
+		return paths[len(paths)-1]
+	}
 	return filepath.Join(cwd, DefaultLocalConfigName)
+}
+
+func localConfigPathsForMerge(cwd string, localName string) []string {
+	base := strings.TrimSpace(cwd)
+	if base == "" {
+		base = "."
+	}
+	name := strings.TrimSpace(localName)
+	if name == "" {
+		name = DefaultLocalConfigName
+	}
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return nil
+	}
+	stopDir := ""
+	absHome, homeErr := filepath.Abs(filepath.Clean(effectiveHomeDir()))
+	if homeErr == nil && pathWithin(absHome, absBase) {
+		stopDir = absHome
+	}
+	found := []string{}
+	for {
+		candidate := filepath.Join(absBase, name)
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			found = append(found, candidate)
+		}
+		if stopDir != "" && absBase == stopDir {
+			break
+		}
+		parent := filepath.Dir(absBase)
+		if parent == absBase {
+			break
+		}
+		absBase = parent
+	}
+	for i, j := 0, len(found)-1; i < j; i, j = i+1, j-1 {
+		found[i], found[j] = found[j], found[i]
+	}
+	return found
 }
 
 func SetLocalSuffix(path string, suffix string) (bool, error) {

@@ -121,6 +121,87 @@ func TestLoadLocalSuffixOverridesGlobal(t *testing.T) {
 	}
 }
 
+func TestLoadFindsNearestAncestorLocalConfig(t *testing.T) {
+	setIsolatedHome(t)
+
+	root := t.TempDir()
+	child := filepath.Join(root, "www")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("mkdir child: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, DefaultLocalConfigName), []byte("suffix: dnsvard\nhost_pattern: service-workspace-tld\n"), 0o644); err != nil {
+		t.Fatalf("write root local config: %v", err)
+	}
+
+	cfg, err := Load(LoadOptions{CWD: child, SkipGlobalInit: true})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Domain != "dnsvard" {
+		t.Fatalf("Domain = %q, want %q", cfg.Domain, "dnsvard")
+	}
+	if cfg.HostPattern != "service-workspace-tld" {
+		t.Fatalf("HostPattern = %q, want %q", cfg.HostPattern, "service-workspace-tld")
+	}
+}
+
+func TestLoadMergesAncestorLocalConfigsNearestWins(t *testing.T) {
+	setIsolatedHome(t)
+
+	root := t.TempDir()
+	levelA := filepath.Join(root, "a")
+	levelB := filepath.Join(levelA, "b")
+	levelC := filepath.Join(levelB, "c")
+	if err := os.MkdirAll(levelC, 0o755); err != nil {
+		t.Fatalf("mkdir nested dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(levelA, DefaultLocalConfigName), []byte("suffix: outer.test\nhost_pattern: workspace-project-tld\n"), 0o644); err != nil {
+		t.Fatalf("write ancestor config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(levelB, DefaultLocalConfigName), []byte("host_pattern: service-workspace-tld\n"), 0o644); err != nil {
+		t.Fatalf("write nearest config: %v", err)
+	}
+
+	cfg, err := Load(LoadOptions{CWD: levelC, SkipGlobalInit: true})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Domain != "outer.test" {
+		t.Fatalf("Domain = %q, want %q", cfg.Domain, "outer.test")
+	}
+	if cfg.HostPattern != "service-workspace-tld" {
+		t.Fatalf("HostPattern = %q, want %q", cfg.HostPattern, "service-workspace-tld")
+	}
+}
+
+func TestLoadStopsAncestorSearchAtHomeDir(t *testing.T) {
+	outsideRoot := t.TempDir()
+	home := filepath.Join(outsideRoot, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("SUDO_UID", "")
+	t.Setenv("DNSVARD_SUFFIX", "")
+	t.Setenv("DNSVARD_HOST_PATTERN", "")
+
+	if err := os.WriteFile(filepath.Join(outsideRoot, DefaultLocalConfigName), []byte("suffix: leaked.test\n"), 0o644); err != nil {
+		t.Fatalf("write outside config: %v", err)
+	}
+	cwd := filepath.Join(home, "projects", "repo", "www")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("mkdir cwd: %v", err)
+	}
+
+	cfg, err := Load(LoadOptions{CWD: cwd, SkipGlobalInit: true})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.Domain != "test" {
+		t.Fatalf("Domain = %q, want %q", cfg.Domain, "test")
+	}
+}
+
 func TestLoadIgnoresSuffixesInGlobalConfig(t *testing.T) {
 	setIsolatedHome(t)
 
