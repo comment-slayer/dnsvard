@@ -1210,78 +1210,7 @@ func deriveWorkspaceLabel(labels map[string]string) string {
 }
 
 func selectContainerTarget(containers []dockerContainer, target string) ([]dockerContainer, error) {
-	target = strings.TrimSpace(target)
-	if target == "all" {
-		out := append([]dockerContainer{}, containers...)
-		return out, nil
-	}
-	out := []dockerContainer{}
-	add := func(c dockerContainer) {
-		for _, existing := range out {
-			if existing.ID == c.ID {
-				return
-			}
-		}
-		out = append(out, c)
-	}
-
-	if strings.HasPrefix(target, "container/") {
-		needle := strings.TrimPrefix(target, "container/")
-		for _, c := range containers {
-			if c.Name == needle || strings.HasPrefix(c.ID, needle) {
-				add(c)
-			}
-		}
-		if len(out) == 0 {
-			return nil, fmt.Errorf("container %q not found", needle)
-		}
-		return out, nil
-	}
-	if strings.HasPrefix(target, "project/") {
-		project := identity.NormalizeLabel(strings.TrimPrefix(target, "project/"))
-		for _, c := range containers {
-			if identity.NormalizeLabel(c.Project) == project {
-				add(c)
-			}
-		}
-		if len(out) == 0 {
-			return nil, fmt.Errorf("project %q not found", project)
-		}
-		return out, nil
-	}
-	if strings.HasPrefix(target, "workspace/") {
-		raw := strings.TrimPrefix(target, "workspace/")
-		workspace := raw
-		project := ""
-		if at := strings.Index(raw, "@"); at >= 0 {
-			workspace = raw[:at]
-			project = raw[at+1:]
-		}
-		workspace = identity.NormalizeLabel(workspace)
-		project = identity.NormalizeLabel(project)
-		for _, c := range containers {
-			if identity.NormalizeLabel(c.Workspace) != workspace {
-				continue
-			}
-			if project != "" && identity.NormalizeLabel(c.Project) != project {
-				continue
-			}
-			add(c)
-		}
-		if len(out) == 0 {
-			return nil, fmt.Errorf("workspace %q not found", raw)
-		}
-		return out, nil
-	}
-	for _, c := range containers {
-		if c.Name == target || strings.HasPrefix(c.ID, target) {
-			add(c)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("unknown target %q\nuse `dnsvard ps` to list managed targets", target)
-	}
-	return out, nil
+	return filterContainersForPS(containers, target)
 }
 
 func resolveDockerCLIPath() (string, error) {

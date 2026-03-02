@@ -107,3 +107,43 @@ func TestSelectContainerTargetAllowsComposeOnlyScope(t *testing.T) {
 		t.Fatalf("selected = %#v", selected)
 	}
 }
+
+func TestSelectContainerTargetSupportsProjectPrefixPattern(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{
+		{ID: "a", Name: "feat-1-api", Project: "breadstick", Workspace: "feat-1"},
+		{ID: "b", Name: "master-api", Project: "comment-slayer", Workspace: "master"},
+	}
+	selected, err := selectContainerTarget(containers, "project/bread")
+	if err != nil {
+		t.Fatalf("selectContainerTarget returned error: %v", err)
+	}
+	if len(selected) != 1 || selected[0].ID != "a" {
+		t.Fatalf("selected = %#v", selected)
+	}
+}
+
+func TestSelectContainerTargetSupportsProjectShorthand(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{
+		{ID: "a", Name: "feat-1-api", Project: "breadstick", Workspace: "feat-1"},
+		{ID: "b", Name: "master-api", Project: "comment-slayer", Workspace: "master"},
+	}
+	selected, err := selectContainerTarget(containers, "project")
+	if err != nil {
+		t.Fatalf("selectContainerTarget(project) returned error: %v", err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("selected(project) = %#v", selected)
+	}
+
+	selectedSlash, err := selectContainerTarget(containers, "project/")
+	if err != nil {
+		t.Fatalf("selectContainerTarget(project/) returned error: %v", err)
+	}
+	if len(selectedSlash) != 2 {
+		t.Fatalf("selected(project/) = %#v", selectedSlash)
+	}
+}
