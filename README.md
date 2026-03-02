@@ -128,6 +128,12 @@ Homebrew (macOS):
 brew install --cask comment-slayer/tap/dnsvard
 ```
 
+If macOS blocks first launch with a message like `"dnsvard" Not Opened`:
+
+- Open **System Settings -> Privacy & Security**
+- Scroll to the bottom and click **Open Anyway** for `dnsvard`
+- Run `dnsvard` again
+
 Release installer (checksum verified):
 
 ```bash

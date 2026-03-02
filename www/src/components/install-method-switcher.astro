@@ -6,6 +6,7 @@ const methods = [
     command: 'curl -fsSL https://dnsvard.com/install | sh',
     caption: 'macOS and Linux installer script.',
     help: 'Upgrade path: dnsvard upgrade',
+    note: null,
   },
   {
     key: 'brew',
@@ -13,6 +14,7 @@ const methods = [
     command: 'brew install --cask comment-slayer/tap/dnsvard',
     caption: 'Homebrew cask for macOS.',
     help: 'Upgrade path: brew upgrade --cask comment-slayer/tap/dnsvard',
+    note: 'If macOS shows "dnsvard Not Opened", allow it in System Settings -> Privacy & Security (Scroll to the bottom and "Open Anyway"), then run dnsvard again.',
   },
 ] as const;
 ---
@@ -45,6 +47,7 @@ const methods = [
           <span class="sr-only" data-copy-live aria-live="polite"></span>
         </button>
         <p class="mt-2 text-[0.77rem] text-slate-400 md:mt-[0.7rem] md:text-[0.78rem]">{method.help}</p>
+        {method.note ? <p class="mt-1 text-[0.77rem] text-amber-300/90 md:text-[0.78rem]">{method.note}</p> : null}
       </section>
     ))
   }
