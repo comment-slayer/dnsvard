@@ -43,6 +43,117 @@ const architectureDiagram = `
          v        v
   workspace IP  containers
 `;
+
+const consoleOutput = `
+$ setup-worktree feat-1 feat-2 feat-3
+worktree ready: sl/feat-1 => ../feat-1
+worktree ready: sl/feat-2 => ../feat-2
+worktree ready: sl/feat-3 => ../feat-3
+
+$ dnsvard ps
+runtime leases: 0
+docker containers: 9
+- project/breadsticks containers=9
+  - [running] workspace/feat-1@breadsticks domain=feat-1.breadsticks.test containers=3
+    - [running] container/feat-1-api-1 service=api
+    - [running] container/feat-1-frontend-1 service=frontend
+    - [running] container/feat-1-postgres-1 service=postgres
+  - [running] workspace/feat-2@breadsticks domain=feat-2.breadsticks.test containers=3
+    - [running] container/feat-2-api-1 service=api
+    - [running] container/feat-2-frontend-1 service=frontend
+    - [running] container/feat-2-postgres-1 service=postgres
+  - [running] workspace/feat-3@breadsticks domain=feat-3.breadsticks.test containers=3
+    - [running] container/feat-3-api-1 service=api
+    - [running] container/feat-3-frontend-1 service=frontend
+    - [running] container/feat-3-postgres-1 service=postgres
+
+$ curl feat-1.breadsticks.test
+frontend: sl/feat-1
+
+$ curl feat-2.breadsticks.test
+frontend: sl/feat-2
+
+$ curl api.feat-2.breadsticks.test
+{"branch":"sl/feat-2"}
+
+$ psql -c 'select system_identifier from pg_control_system()' -h feat-1.breadsticks.test
+7612711402309095461
+
+$ psql -c 'select system_identifier from pg_control_system()' -h feat-2.breadsticks.test
+7612711418985173029
+
+$ cd ../feat-1
+
+feat-1$ dnsvard config local set suffix bs
+updated local suffix in ~/src/breadsticks/feat-1/dnsvard.yaml
+feat-1$ dnsvard config local set host_pattern service-workspace-tld
+updated local host_pattern in ~/src/breadsticks/feat-1/dnsvard.yaml
+
+feat-1$ dnsvard ps workspace/feat-1@breadsticks
+runtime leases: 0
+docker containers: 3
+- [running] workspace/feat-1@breadsticks domain=feat-1.bs containers=3
+  - [running] container/feat-1-api-1 service=api
+  - [running] container/feat-1-frontend-1 service=frontend
+  - [running] container/feat-1-postgres-1 service=postgres
+
+feat-1$ curl feat-1.bs
+frontend: sl/feat-1
+
+feat-1$ dnsvard rm -f workspace/feat-1@breadsticks
+removing containers: 3
+done
+
+feat-1$ dnsvard ps
+runtime leases: 0
+docker containers: 6
+- project/breadsticks containers=6
+  - [running] workspace/feat-2@breadsticks domain=feat-2.breadsticks.test containers=3
+    - [running] container/feat-2-api-1 service=api
+    - [running] container/feat-2-frontend-1 service=frontend
+    - [running] container/feat-2-postgres-1 service=postgres
+  - [running] workspace/feat-3@breadsticks domain=feat-3.breadsticks.test containers=3
+    - [running] container/feat-3-api-1 service=api
+    - [running] container/feat-3-frontend-1 service=frontend
+    - [running] container/feat-3-postgres-1 service=postgres
+
+feat-1$ dnsvard rm -f project/breadsticks
+removing containers: 6
+done
+
+feat-1$ dnsvard ps
+runtime leases: 0
+docker containers: 0
+`;
+
+const consoleLines = consoleOutput.trimEnd().split('\n');
+
+function splitPrompt(line: string) {
+  const match = line.match(/^(\s*(?:[^\s$]+\$|\$)\s)(.*)$/);
+  if (!match) {
+    return null;
+  }
+  return { prompt: match[1], command: match[2] };
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+const consoleOutputHtml = consoleLines
+  .map((line) => {
+    const parts = splitPrompt(line);
+    if (parts) {
+      return `<span class="text-slate-500">${escapeHtml(parts.prompt)}</span><span class="text-emerald-300">${escapeHtml(parts.command)}</span>`;
+    }
+    return `<span class="text-slate-300">${escapeHtml(line)}</span>`;
+  })
+  .join('\n');
 ---
 
 <PostHogLayout
@@ -82,8 +193,11 @@ const architectureDiagram = `
         </section>
 
         <section class="section-rule" aria-label="dnsvard architecture">
-          <div class="command-well w-full max-w-full overflow-x-auto rounded-[0.75rem] p-[0.8rem]">
+          <div class="command-well w-full max-w-full overflow-x-auto rounded-[0.75rem] p-[0.8rem] mb-4">
             <pre class="mx-auto my-0 w-max text-left text-[0.72rem] leading-[1.35] text-slate-300 md:text-[0.78rem]">{architectureDiagram}</pre>
+          </div>
+          <div class="command-well w-full max-w-full overflow-x-auto rounded-[0.75rem] p-[0.8rem]">
+            <pre class="mx-0 my-0 w-max text-left text-[0.72rem] leading-[1.35] md:text-[0.78rem]"><code set:html={consoleOutputHtml}></code></pre>
           </div>
           <p class="mb-0 mt-2 md:mt-[0.7rem]">
             <a
