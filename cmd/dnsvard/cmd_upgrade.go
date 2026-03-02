@@ -518,5 +518,40 @@ func isBrewManagedInstall(exePath string) bool {
 			return true
 		}
 	}
+	for _, p := range paths {
+		if !isLikelyBrewLinkedBinaryPath(p) {
+			continue
+		}
+		if brewHasPackage("dnsvard", true) || brewHasPackage("dnsvard", false) {
+			return true
+		}
+	}
 	return false
+}
+
+func isLikelyBrewLinkedBinaryPath(path string) bool {
+	normalized := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+	if normalized == "" {
+		return false
+	}
+	return strings.HasSuffix(normalized, "/opt/homebrew/bin/dnsvard") || strings.HasSuffix(normalized, "/usr/local/bin/dnsvard") || strings.HasSuffix(normalized, "/home/linuxbrew/.linuxbrew/bin/dnsvard")
+}
+
+func brewHasPackage(name string, cask bool) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	if _, err := exec.LookPath("brew"); err != nil {
+		return false
+	}
+	args := []string{"list", "--versions"}
+	if cask {
+		args = append(args, "--cask")
+	}
+	args = append(args, name)
+	out, err := exec.Command("brew", args...).CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }

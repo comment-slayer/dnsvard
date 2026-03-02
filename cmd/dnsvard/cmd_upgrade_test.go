@@ -211,3 +211,29 @@ func TestIsBrewManagedInstall(t *testing.T) {
 		})
 	}
 }
+
+func TestIsLikelyBrewLinkedBinaryPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "apple silicon brew bin", path: "/opt/homebrew/bin/dnsvard", want: true},
+		{name: "intel mac brew bin", path: "/usr/local/bin/dnsvard", want: true},
+		{name: "linuxbrew bin", path: "/home/linuxbrew/.linuxbrew/bin/dnsvard", want: true},
+		{name: "non-brew bin", path: "/Users/some-user/.local/bin/dnsvard", want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := isLikelyBrewLinkedBinaryPath(tc.path)
+			if got != tc.want {
+				t.Fatalf("isLikelyBrewLinkedBinaryPath(%q) = %t, want %t", tc.path, got, tc.want)
+			}
+		})
+	}
+}
