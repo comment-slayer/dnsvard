@@ -186,8 +186,8 @@ func runRun(_ context.Context, logger *logx.Logger, cfg config.Config, args []st
 		fmt.Printf("- http proxy target: http://localhost:%d\n", lease.HTTPPort)
 	}
 
-	const gracefulShutdownWindow = 2 * time.Second
-	const terminationWindow = 2 * time.Second
+	const gracefulShutdownWindow = 750 * time.Millisecond
+	const terminationWindow = 750 * time.Millisecond
 
 	var shutdownPhase int
 	var escalationTimer *time.Timer
@@ -243,6 +243,20 @@ func runRun(_ context.Context, logger *logx.Logger, cfg config.Config, args []st
 
 		select {
 		case err := <-waitCh:
+			if shutdownPhase > 0 {
+				if err == nil {
+					return nil
+				}
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
+					if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+						sig := status.Signal()
+						if sig == syscall.SIGINT || sig == syscall.SIGTERM || sig == syscall.SIGKILL {
+							return nil
+						}
+					}
+				}
+			}
 			if err != nil {
 				return err
 			}
