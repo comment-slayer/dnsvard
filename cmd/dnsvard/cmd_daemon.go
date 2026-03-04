@@ -760,6 +760,7 @@ func runDaemonForegroundTo(out io.Writer, errOut io.Writer, logger *logx.Logger,
 	provider := docker.New()
 	plat := platform.New()
 	runtimeProvider := runtimeprovider.New(cfg.StateDir)
+	unreachableTargets := newUnreachableTargetTracker()
 	routesResult, err := buildRoutes(buildRoutesInput{
 		Cfg:             effectiveCfg,
 		Project:         project,
@@ -768,6 +769,8 @@ func runDaemonForegroundTo(out io.Writer, errOut io.Writer, logger *logx.Logger,
 		Allocator:       alloc,
 		Provider:        provider,
 		RuntimeProvider: runtimeProvider,
+		AvoidHTTPTarget: unreachableTargets.SnapshotActive(time.Now()),
+		Now:             time.Now(),
 	})
 	if err != nil {
 		return startupBuildRoutesError(err)
@@ -782,6 +785,7 @@ func runDaemonForegroundTo(out io.Writer, errOut io.Writer, logger *logx.Logger,
 	lastWorkspaceDomains := copyStringMap(routesResult.WorkspaceDomains)
 	warningState := map[string]struct{}{}
 	lastAppliedHTTPTargets := routeTargetsByHost(httpRoutes)
+	httpRouteHealthCache := map[string]httpRouteHealthCacheEntry{}
 	healing := newHealCoordinator()
 	actionStates := map[healActionID]daemon.SelfHealActionState{}
 	var selfHealMu sync.Mutex
@@ -882,6 +886,7 @@ func runDaemonForegroundTo(out io.Writer, errOut io.Writer, logger *logx.Logger,
 		}
 		proxyErrorMu.Lock()
 		now := time.Now()
+		unreachableTargets.Record(hostname, target, now)
 		if now.Sub(lastProxyErrorTrigger) < 2*time.Second {
 			proxyErrorMu.Unlock()
 			return
@@ -1145,6 +1150,8 @@ func runDaemonForegroundTo(out io.Writer, errOut io.Writer, logger *logx.Logger,
 				Allocator:       alloc,
 				Provider:        provider,
 				RuntimeProvider: runtimeProvider,
+				AvoidHTTPTarget: unreachableTargets.SnapshotActive(time.Now()),
+				Now:             time.Now(),
 			})
 			if recErr != nil {
 				logger.Warn("reconcile failed", "cause", cause, "error", recErr)
@@ -1174,7 +1181,7 @@ func runDaemonForegroundTo(out io.Writer, errOut io.Writer, logger *logx.Logger,
 			}
 			healthFallbacks := 0
 			nextHTTPRoutes := append([]httprouter.Route(nil), nextResult.HTTPRoutes...)
-			nextHTTPRoutes, healthFallbacks = preserveLastHealthyHTTPRoutes(nextHTTPRoutes, lastAppliedHTTPTargets)
+			nextHTTPRoutes, healthFallbacks = preserveLastHealthyHTTPRoutes(nextHTTPRoutes, lastAppliedHTTPTargets, httpRouteHealthCache, time.Now())
 			nextWarnings := append([]string(nil), nextResult.Warnings...)
 			if healthFallbacks > 0 {
 				nextWarnings = append(nextWarnings, fmt.Sprintf("kept %d previous HTTP targets until new targets are healthy", healthFallbacks))
@@ -1576,10 +1583,30 @@ func routeTargetsByHost(routes []httprouter.Route) map[string]string {
 	return out
 }
 
-func preserveLastHealthyHTTPRoutes(next []httprouter.Route, previous map[string]string) ([]httprouter.Route, int) {
+type httpRouteHealthCacheEntry struct {
+	CheckedAt time.Time
+	Healthy   bool
+}
+
+const (
+	httpRouteHealthyCacheTTL   = 45 * time.Second
+	httpRouteUnhealthyCacheTTL = 3 * time.Second
+	httpRouteHealthCacheMaxAge = 3 * time.Minute
+)
+
+func preserveLastHealthyHTTPRoutes(next []httprouter.Route, previous map[string]string, cache map[string]httpRouteHealthCacheEntry, now time.Time) ([]httprouter.Route, int) {
 	if len(previous) == 0 || len(next) == 0 {
 		return next, 0
 	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	pruneHTTPRouteHealthCache(cache, now)
+
+	isHealthy := func(target string) bool {
+		return isHTTPRouteHealthyCached(target, cache, now)
+	}
+
 	out := make([]httprouter.Route, 0, len(next))
 	fallbacks := 0
 	for _, route := range next {
@@ -1589,12 +1616,12 @@ func preserveLastHealthyHTTPRoutes(next []httprouter.Route, previous map[string]
 			out = append(out, route)
 			continue
 		}
-		if isHTTPRouteHealthy(target) {
+		if isHealthy(target) {
 			out = append(out, route)
 			continue
 		}
 		if prevTarget, ok := previous[host]; ok && prevTarget != "" && prevTarget != target {
-			if isHTTPRouteHealthy(prevTarget) {
+			if isHealthy(prevTarget) {
 				route.Target = prevTarget
 				fallbacks++
 			}
@@ -1602,6 +1629,40 @@ func preserveLastHealthyHTTPRoutes(next []httprouter.Route, previous map[string]
 		out = append(out, route)
 	}
 	return out, fallbacks
+}
+
+func isHTTPRouteHealthyCached(target string, cache map[string]httpRouteHealthCacheEntry, now time.Time) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	if cache != nil {
+		if entry, ok := cache[target]; ok {
+			ttl := httpRouteUnhealthyCacheTTL
+			if entry.Healthy {
+				ttl = httpRouteHealthyCacheTTL
+			}
+			if now.Sub(entry.CheckedAt) < ttl {
+				return entry.Healthy
+			}
+		}
+	}
+	healthy := isHTTPRouteHealthy(target)
+	if cache != nil {
+		cache[target] = httpRouteHealthCacheEntry{CheckedAt: now, Healthy: healthy}
+	}
+	return healthy
+}
+
+func pruneHTTPRouteHealthCache(cache map[string]httpRouteHealthCacheEntry, now time.Time) {
+	if cache == nil {
+		return
+	}
+	for target, entry := range cache {
+		if now.Sub(entry.CheckedAt) > httpRouteHealthCacheMaxAge {
+			delete(cache, target)
+		}
+	}
 }
 
 func isHTTPRouteHealthy(target string) bool {
@@ -1682,6 +1743,82 @@ type proxyUnreachableBurst struct {
 	windowStart    time.Time
 	count          int
 	lastEscalation time.Time
+}
+
+type unreachableTargetTracker struct {
+	mu      sync.Mutex
+	entries map[string]unreachableTargetState
+}
+
+type unreachableTargetState struct {
+	windowStart  time.Time
+	failureCount int
+	quarantined  time.Time
+}
+
+func newUnreachableTargetTracker() *unreachableTargetTracker {
+	return &unreachableTargetTracker{entries: map[string]unreachableTargetState{}}
+}
+
+func (t *unreachableTargetTracker) Record(hostname string, target string, now time.Time) {
+	if t == nil {
+		return
+	}
+	host := strings.ToLower(strings.TrimSpace(hostname))
+	target = strings.TrimSpace(target)
+	if host == "" || target == "" {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	key := host + "|" + target
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state := t.entries[key]
+	if state.windowStart.IsZero() || now.Sub(state.windowStart) > 20*time.Second {
+		state.windowStart = now
+		state.failureCount = 0
+	}
+	state.failureCount++
+	if state.failureCount >= 3 {
+		state.quarantined = now.Add(45 * time.Second)
+		state.failureCount = 0
+		state.windowStart = now
+	}
+	t.entries[key] = state
+}
+
+func (t *unreachableTargetTracker) SnapshotActive(now time.Time) map[string]time.Time {
+	if t == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := map[string]time.Time{}
+	for key, state := range t.entries {
+		if state.quarantined.IsZero() || !now.Before(state.quarantined) {
+			delete(t.entries, key)
+			continue
+		}
+		parts := strings.SplitN(key, "|", 2)
+		if len(parts) != 2 {
+			delete(t.entries, key)
+			continue
+		}
+		target := strings.TrimSpace(parts[1])
+		if target == "" {
+			continue
+		}
+		expiresAt, ok := out[target]
+		if !ok || expiresAt.Before(state.quarantined) {
+			out[target] = state.quarantined
+		}
+	}
+	return out
 }
 
 func detectPersistentProxyUnreachable(state *proxyUnreachableBurst, now time.Time) bool {

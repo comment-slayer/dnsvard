@@ -17,6 +17,7 @@ type Lease struct {
 	ID        string   `json:"id"`
 	PID       int      `json:"pid"`
 	Hostnames []string `json:"hostnames"`
+	Domain    string   `json:"domain,omitempty"`
 	HTTPPort  int      `json:"http_port,omitempty"`
 	CreatedAt string   `json:"created_at"`
 }

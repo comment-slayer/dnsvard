@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/comment-slayer/dnsvard/internal/allocator"
 	"github.com/comment-slayer/dnsvard/internal/config"
@@ -35,6 +36,8 @@ type buildRoutesInput struct {
 	Allocator       *allocator.Allocator
 	Provider        *docker.Provider
 	RuntimeProvider *runtimeprovider.Provider
+	AvoidHTTPTarget map[string]time.Time
+	Now             time.Time
 }
 
 type buildRoutesResult struct {
@@ -225,6 +228,9 @@ func buildRoutes(in buildRoutesInput) (buildRoutesResult, error) {
 		return buildRoutesResult{}, fmt.Errorf("read runtime leases: %w", err)
 	}
 	for _, lease := range activeLeases {
+		if d := runtimeLeaseDomain(lease); d != "" {
+			managedDomainSet[d] = struct{}{}
+		}
 		for _, h := range lease.Hostnames {
 			entries = append(entries, routes.Entry{Hostname: h, IP: workspaceIP, Source: routes.SourceRuntime})
 			if lease.HTTPPort > 0 {
@@ -246,7 +252,12 @@ func buildRoutes(in buildRoutesInput) (buildRoutesResult, error) {
 		scopeID := workspaceKey(scope.project, scope.workspace)
 		target := ""
 		if route.HTTPPort > 0 {
-			target = fmt.Sprintf("http://%s:%d", route.ContainerIP, route.HTTPPort)
+			var avoidedTarget string
+			var selectedAlternate bool
+			target, avoidedTarget, selectedAlternate = pickServiceRouteTarget(route, in.AvoidHTTPTarget, in.Now)
+			if selectedAlternate && avoidedTarget != "" {
+				warnings = append(warnings, fmt.Sprintf("quarantined unreachable upstream target %s for service %s (container=%s id=%s network=%s/%s); selected alternate %s", avoidedTarget, route.ServiceName, route.ContainerName, route.ContainerID, route.NetworkName, route.NetworkID, target))
+			}
 		}
 		portSeen := map[int]struct{}{}
 		for _, port := range route.TCPPorts {
@@ -353,6 +364,61 @@ func buildRoutes(in buildRoutesInput) (buildRoutesResult, error) {
 	}, nil
 }
 
+func pickServiceRouteTarget(route docker.ServiceRoute, avoid map[string]time.Time, now time.Time) (string, string, bool) {
+	if route.HTTPPort <= 0 {
+		return "", "", false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	candidates := make([]string, 0, len(route.CandidateIPs)+1)
+	if strings.TrimSpace(route.ContainerIP) != "" {
+		candidates = append(candidates, strings.TrimSpace(route.ContainerIP))
+	}
+	for _, ip := range route.CandidateIPs {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range candidates {
+			if existing == ip {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			candidates = append(candidates, ip)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", "", false
+	}
+	firstAvoided := ""
+	for _, ip := range candidates {
+		target := fmt.Sprintf("http://%s:%d", ip, route.HTTPPort)
+		if isTargetAvoided(target, avoid, now) {
+			if firstAvoided == "" {
+				firstAvoided = target
+			}
+			continue
+		}
+		return target, firstAvoided, firstAvoided != ""
+	}
+	return fmt.Sprintf("http://%s:%d", candidates[0], route.HTTPPort), "", false
+}
+
+func isTargetAvoided(target string, avoid map[string]time.Time, now time.Time) bool {
+	if len(avoid) == 0 {
+		return false
+	}
+	expiresAt, ok := avoid[strings.TrimSpace(target)]
+	if !ok {
+		return false
+	}
+	return now.Before(expiresAt)
+}
+
 func managedDomainsFromSet(domains map[string]struct{}, fallback string) []string {
 	out := make([]string, 0, len(domains)+1)
 	for domain := range domains {
@@ -369,6 +435,38 @@ func managedDomainsFromSet(domains map[string]struct{}, fallback string) []strin
 	}
 	sort.Strings(out)
 	return out
+}
+
+func runtimeLeaseDomain(lease runtimeprovider.Lease) string {
+	if d := strings.ToLower(strings.Trim(strings.TrimSpace(lease.Domain), ".")); d != "" {
+		return d
+	}
+	return inferDomainFromHostnames(lease.Hostnames)
+}
+
+func inferDomainFromHostnames(hostnames []string) string {
+	best := ""
+	bestParts := 0
+	for _, host := range hostnames {
+		host = strings.ToLower(strings.Trim(strings.TrimSpace(host), "."))
+		if host == "" {
+			continue
+		}
+		parts := strings.Split(host, ".")
+		if len(parts) < 2 {
+			continue
+		}
+		candidate := strings.Join(parts[1:], ".")
+		candidateParts := len(parts) - 1
+		if candidate == "" {
+			continue
+		}
+		if best == "" || candidateParts < bestParts || (candidateParts == bestParts && len(candidate) < len(best)) {
+			best = candidate
+			bestParts = candidateParts
+		}
+	}
+	return best
 }
 
 func logDiscoveryWarnings(logger *logx.Logger, warnings []string, prior map[string]struct{}) {

@@ -29,6 +29,7 @@ type ServiceRoute struct {
 	Workspace     string
 	WorkspacePath string
 	ContainerIP   string
+	CandidateIPs  []string
 	NetworkName   string
 	NetworkID     string
 	HostLabels    []string
@@ -55,6 +56,12 @@ type WatchStats struct {
 type Provider struct {
 	watchMu    sync.Mutex
 	watchStats WatchStats
+}
+
+type containerNetworkCandidate struct {
+	name string
+	id   string
+	ip   string
 }
 
 func New() *Provider {
@@ -330,7 +337,7 @@ func parseInspect(in dockerInspect) (ServiceRoute, bool, Diagnostics) {
 	}
 
 	tcpPorts := candidateTCPPorts(in)
-	networkName, networkID, containerIP := selectContainerNetwork(in, labels, preferredProbePorts(httpPort, tcpPorts))
+	networkName, networkID, containerIP, candidateIPs := selectContainerNetwork(in, labels, preferredProbePorts(httpPort, tcpPorts))
 	route := ServiceRoute{
 		ContainerID:   in.ID,
 		ContainerName: strings.TrimPrefix(in.Name, "/"),
@@ -339,6 +346,7 @@ func parseInspect(in dockerInspect) (ServiceRoute, bool, Diagnostics) {
 		Workspace:     workspaceLabel(labels),
 		WorkspacePath: strings.TrimSpace(labels["com.docker.compose.project.working_dir"]),
 		ContainerIP:   containerIP,
+		CandidateIPs:  candidateIPs,
 		NetworkName:   networkName,
 		NetworkID:     networkID,
 		HostLabels:    hostLabels,
@@ -557,13 +565,8 @@ func preferredProbePorts(httpPort int, tcpPorts []int) []int {
 	return out
 }
 
-func selectContainerNetwork(in dockerInspect, labels map[string]string, probePorts []int) (string, string, string) {
-	type candidate struct {
-		name string
-		id   string
-		ip   string
-	}
-	candidates := make([]candidate, 0, len(in.NetworkSettings.Networks))
+func selectContainerNetwork(in dockerInspect, labels map[string]string, probePorts []int) (string, string, string, []string) {
+	candidates := make([]containerNetworkCandidate, 0, len(in.NetworkSettings.Networks))
 	for name, nw := range in.NetworkSettings.Networks {
 		ip := strings.TrimSpace(nw.IPAddress)
 		if ip == "" {
@@ -572,17 +575,17 @@ func selectContainerNetwork(in dockerInspect, labels map[string]string, probePor
 		if parsed := net.ParseIP(ip); parsed == nil {
 			continue
 		}
-		candidates = append(candidates, candidate{name: name, id: strings.TrimSpace(nw.NetworkID), ip: ip})
+		candidates = append(candidates, containerNetworkCandidate{name: name, id: strings.TrimSpace(nw.NetworkID), ip: ip})
 	}
 	if len(candidates) == 0 {
-		return "", "", ""
+		return "", "", "", nil
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].name < candidates[j].name
 	})
 
-	ordered := make([]candidate, 0, len(candidates))
+	ordered := make([]containerNetworkCandidate, 0, len(candidates))
 	appendByName := func(name string) bool {
 		for _, c := range candidates {
 			if c.name == name {
@@ -615,12 +618,33 @@ func selectContainerNetwork(in dockerInspect, labels map[string]string, probePor
 	if len(probePorts) > 0 && len(ordered) > 1 {
 		for _, c := range ordered {
 			if containerIPReachable(c.ip, probePorts) {
-				return c.name, c.id, c.ip
+				return c.name, c.id, c.ip, candidateIPOrder(c, ordered)
 			}
 		}
 	}
 	selected := ordered[0]
-	return selected.name, selected.id, selected.ip
+	return selected.name, selected.id, selected.ip, candidateIPOrder(selected, ordered)
+}
+
+func candidateIPOrder(selected containerNetworkCandidate, ordered []containerNetworkCandidate) []string {
+	out := make([]string, 0, len(ordered))
+	seen := map[string]struct{}{}
+	appendIP := func(ip string) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			return
+		}
+		if _, ok := seen[ip]; ok {
+			return
+		}
+		seen[ip] = struct{}{}
+		out = append(out, ip)
+	}
+	appendIP(selected.ip)
+	for _, c := range ordered {
+		appendIP(c.ip)
+	}
+	return out
 }
 
 func containerIPReachable(ip string, ports []int) bool {

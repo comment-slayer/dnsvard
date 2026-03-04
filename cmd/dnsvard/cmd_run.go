@@ -156,6 +156,7 @@ func runRun(_ context.Context, logger *logx.Logger, cfg config.Config, args []st
 		ID:        leaseID,
 		PID:       command.Process.Pid,
 		Hostnames: hostnames,
+		Domain:    cfg.Domain,
 		HTTPPort:  runtimePort,
 	}
 	if err := rp.Upsert(lease); err != nil {
