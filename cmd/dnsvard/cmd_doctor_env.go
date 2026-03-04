@@ -40,9 +40,10 @@ func runDoctor(options doctorRunOptions) error {
 	probeRouting := options.ProbeRouting
 	jsonOutput := options.JSONOutput
 
+	desiredManagedSuffixes := doctorDesiredManagedSuffixes(cfg)
 	resolverOK, resolverMsg := "unknown", "not checked"
 	missingDomains := []string{}
-	for _, domain := range cfg.Domains {
+	for _, domain := range desiredManagedSuffixes {
 		spec, specErr := resolverSpecFromListen(cfg, domain)
 		if specErr != nil {
 			return specErr
@@ -121,7 +122,14 @@ func runDoctor(options doctorRunOptions) error {
 
 	managedResolvers := []string{}
 	if managed, listErr := plat.ListManagedResolvers(); listErr == nil {
-		managedResolvers = managed
+		managedResolvers = normalizeResolverDomainList(managed)
+	}
+	suffixManaged := false
+	for _, managed := range desiredManagedSuffixes {
+		if normalizeResolverDomain(managed) == normalizeResolverDomain(cfg.Domain) {
+			suffixManaged = true
+			break
+		}
 	}
 
 	daemonPID := 0
@@ -155,7 +163,7 @@ func runDoctor(options doctorRunOptions) error {
 			Status:   "ok",
 			Platform: plat.Name(),
 			Global: doctorGlobalJSON{
-				ManagedSuffixes: cfg.Domains,
+				ManagedSuffixes: desiredManagedSuffixes,
 			},
 			Workspace: doctorWorkspaceJSON{
 				Suffix:        cfg.Domain,
@@ -216,10 +224,11 @@ func runDoctor(options doctorRunOptions) error {
 		}
 	}
 	fmt.Printf("[global]\n")
-	fmt.Printf("- managed_suffixes: %s\n", strings.Join(cfg.Domains, ","))
+	fmt.Printf("- managed_suffixes: %s\n", strings.Join(desiredManagedSuffixes, ","))
 
 	fmt.Printf("[workspace]\n")
 	fmt.Printf("- suffix: %s\n", cfg.Domain)
+	fmt.Printf("- suffix_managed: %t\n", suffixManaged)
 	fmt.Printf("- host_pattern: %s\n", cfg.HostPattern)
 	fmt.Printf("- project: %s\n", project)
 	fmt.Printf("- workspace: %s\n", workspace)
@@ -286,6 +295,24 @@ func runDoctor(options doctorRunOptions) error {
 	}
 
 	return nil
+}
+
+func doctorDesiredManagedSuffixes(cfg config.Config) []string {
+	fallback := normalizeResolverDomainList(cfg.Domains)
+	path := resolverSyncStatePath(cfg.StateDir)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fallback
+	}
+	state := resolverSyncState{}
+	if err := json.Unmarshal(b, &state); err != nil {
+		return fallback
+	}
+	domains := normalizeResolverDomainList(state.Domains)
+	if len(domains) == 0 {
+		return fallback
+	}
+	return domains
 }
 
 type doctorProblem struct {
