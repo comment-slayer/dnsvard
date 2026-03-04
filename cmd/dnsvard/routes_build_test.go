@@ -3,8 +3,11 @@ package main
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/comment-slayer/dnsvard/internal/config"
+	"github.com/comment-slayer/dnsvard/internal/docker"
+	"github.com/comment-slayer/dnsvard/internal/runtimeprovider"
 )
 
 func TestEffectiveRoutingForScopeWithoutWorkspacePathUsesBaseConfig(t *testing.T) {
@@ -83,5 +86,75 @@ func TestEffectiveRoutingForScopeFallsBackOnLoadError(t *testing.T) {
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("warnings len = %d, want 1", len(warnings))
+	}
+}
+
+func TestPickServiceRouteTargetAvoidsQuarantinedTarget(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	route := docker.ServiceRoute{
+		ContainerIP:  "192.168.10.7",
+		CandidateIPs: []string{"192.168.10.8"},
+		HTTPPort:     8888,
+	}
+	avoid := map[string]time.Time{"http://192.168.10.7:8888": now.Add(30 * time.Second)}
+
+	target, avoided, switched := pickServiceRouteTarget(route, avoid, now)
+	if target != "http://192.168.10.8:8888" {
+		t.Fatalf("target = %q", target)
+	}
+	if avoided != "http://192.168.10.7:8888" || !switched {
+		t.Fatalf("avoided=%q switched=%t", avoided, switched)
+	}
+}
+
+func TestPickServiceRouteTargetFallsBackWhenAllQuarantined(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	route := docker.ServiceRoute{
+		ContainerIP:  "192.168.10.7",
+		CandidateIPs: []string{"192.168.10.8"},
+		HTTPPort:     8888,
+	}
+	avoid := map[string]time.Time{
+		"http://192.168.10.7:8888": now.Add(30 * time.Second),
+		"http://192.168.10.8:8888": now.Add(30 * time.Second),
+	}
+
+	target, avoided, switched := pickServiceRouteTarget(route, avoid, now)
+	if target != "http://192.168.10.7:8888" {
+		t.Fatalf("target = %q", target)
+	}
+	if avoided != "" || switched {
+		t.Fatalf("avoided=%q switched=%t", avoided, switched)
+	}
+}
+
+func TestRuntimeLeaseDomainPrefersExplicitDomain(t *testing.T) {
+	t.Parallel()
+
+	lease := runtimeprovider.Lease{Domain: "Dnsvard", Hostnames: []string{"www.cs"}}
+	if got := runtimeLeaseDomain(lease); got != "dnsvard" {
+		t.Fatalf("runtimeLeaseDomain = %q, want %q", got, "dnsvard")
+	}
+}
+
+func TestRuntimeLeaseDomainInfersFromHostnames(t *testing.T) {
+	t.Parallel()
+
+	lease := runtimeprovider.Lease{Hostnames: []string{"www.master.bs", "master.bs"}}
+	if got := runtimeLeaseDomain(lease); got != "bs" {
+		t.Fatalf("runtimeLeaseDomain = %q, want %q", got, "bs")
+	}
+}
+
+func TestInferDomainFromHostnamesSupportsMultiLabelSuffix(t *testing.T) {
+	t.Parallel()
+
+	hosts := []string{"app.feature.dev.test", "feature.dev.test"}
+	if got := inferDomainFromHostnames(hosts); got != "dev.test" {
+		t.Fatalf("inferDomainFromHostnames = %q, want %q", got, "dev.test")
 	}
 }

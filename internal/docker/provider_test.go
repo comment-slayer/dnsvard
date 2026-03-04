@@ -195,7 +195,7 @@ func TestSelectContainerNetworkPrefersComposeDefault(t *testing.T) {
 	}
 	labels := map[string]string{"com.docker.compose.project": "csdev-master"}
 
-	name, id, ip := selectContainerNetwork(in, labels, nil)
+	name, id, ip, _ := selectContainerNetwork(in, labels, nil)
 	if name != "csdev-master_default" || id != "net-default" || ip != "192.168.100.7" {
 		t.Fatalf("selected network = (%q,%q,%q)", name, id, ip)
 	}
@@ -213,7 +213,7 @@ func TestSelectContainerNetworkFallsBackDeterministically(t *testing.T) {
 		"alpha": {IPAddress: "172.20.0.8", NetworkID: "net-a"},
 	}
 
-	name, id, ip := selectContainerNetwork(in, map[string]string{}, nil)
+	name, id, ip, _ := selectContainerNetwork(in, map[string]string{}, nil)
 	if name != "alpha" || id != "net-a" || ip != "172.20.0.8" {
 		t.Fatalf("selected network = (%q,%q,%q)", name, id, ip)
 	}
@@ -243,8 +243,11 @@ func TestSelectContainerNetworkPrefersReachableCandidate(t *testing.T) {
 	}
 	t.Cleanup(func() { dialTCP = originalDial })
 
-	name, id, ip := selectContainerNetwork(in, labels, []int{8080})
+	name, id, ip, orderedIPs := selectContainerNetwork(in, labels, []int{8080})
 	if name != "bridge" || id != "net-bridge" || ip != "172.20.0.9" {
 		t.Fatalf("selected network = (%q,%q,%q)", name, id, ip)
+	}
+	if len(orderedIPs) != 2 || orderedIPs[0] != "172.20.0.9" {
+		t.Fatalf("orderedIPs = %v", orderedIPs)
 	}
 }

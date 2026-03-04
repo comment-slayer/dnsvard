@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/comment-slayer/dnsvard/internal/httprouter"
 )
@@ -48,7 +50,7 @@ func TestPreserveLastHealthyHTTPRoutes(t *testing.T) {
 	next := []httprouter.Route{{Hostname: "api.master.cs", Target: "http://127.0.0.1:65534"}}
 	previous := map[string]string{"api.master.cs": healthy.URL}
 
-	out, fallbacks := preserveLastHealthyHTTPRoutes(next, previous)
+	out, fallbacks := preserveLastHealthyHTTPRoutes(next, previous, nil, time.Now())
 	if fallbacks != 1 {
 		t.Fatalf("fallbacks = %d, want 1", fallbacks)
 	}
@@ -57,5 +59,45 @@ func TestPreserveLastHealthyHTTPRoutes(t *testing.T) {
 	}
 	if out[0].Target != healthy.URL {
 		t.Fatalf("target = %q, want %q", out[0].Target, healthy.URL)
+	}
+}
+
+func TestPreserveLastHealthyHTTPRoutesCachesHealthyProbes(t *testing.T) {
+	t.Parallel()
+
+	var requests int32
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(healthy.Close)
+
+	next := []httprouter.Route{{Hostname: "api.master.cs", Target: healthy.URL}}
+	cache := map[string]httpRouteHealthCacheEntry{}
+	now := time.Now()
+
+	_, _ = preserveLastHealthyHTTPRoutes(next, map[string]string{"api.master.cs": healthy.URL}, cache, now)
+	_, _ = preserveLastHealthyHTTPRoutes(next, map[string]string{"api.master.cs": healthy.URL}, cache, now.Add(5*time.Second))
+
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("health probe requests = %d, want 1", got)
+	}
+}
+
+func TestUnreachableTargetTrackerQuarantinesAfterBurst(t *testing.T) {
+	t.Parallel()
+
+	tracker := newUnreachableTargetTracker()
+	now := time.Now()
+	host := "hatchet.anonymize-deletions.test"
+	target := "http://192.168.171.7:8888"
+
+	tracker.Record(host, target, now)
+	tracker.Record(host, target, now.Add(5*time.Second))
+	tracker.Record(host, target, now.Add(10*time.Second))
+
+	active := tracker.SnapshotActive(now.Add(10 * time.Second))
+	if _, ok := active[target]; !ok {
+		t.Fatalf("expected %q to be quarantined", target)
 	}
 }
