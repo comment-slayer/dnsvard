@@ -71,8 +71,25 @@ release:
 
 changelog:
   sort: asc
+  use: github
+  format: "- {{ .SHA }}: {{ .Message }}"
   filters:
     exclude:
       - '^docs:'
       - '^test:'
       - '^ci:'
+      - '^chore:'
+      - '^Merge pull request'
+      - '^Merge branch'
+  groups:
+    - title: "Features"
+      regexp: '^(feat|add|introduce)[:(\s].*|^Add\s.*'
+      order: 0
+    - title: "Fixes"
+      regexp: '^(fix|bugfix|hotfix)[:(\s].*|^Fix\s.*'
+      order: 1
+    - title: "Improvements"
+      regexp: '^(improve|enhance|update|refactor|harden|align)[:(\s].*|^(Improve|Enhance|Update|Refactor|Harden|Align)\s.*'
+      order: 2
+    - title: "Maintenance"
+      order: 999
