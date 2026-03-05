@@ -22,6 +22,15 @@ func TestContainerOwnershipPredicates(t *testing.T) {
 		"com.docker.compose.project.working_dir": "/work/myproj/feat-1",
 	}
 	plain := map[string]string{"some.label": "x"}
+	swarm := map[string]string{
+		"com.docker.swarm.service.name": "api",
+		"com.docker.stack.namespace":    "stack",
+	}
+	swarmWithCompose := map[string]string{
+		"com.docker.swarm.service.name": "api",
+		"com.docker.compose.project":    "myproj",
+		"com.docker.compose.service":    "api",
+	}
 
 	if !hasDnsvardLabel(dnsvardLabels) {
 		t.Fatal("expected dnsvard labels to be detected")
@@ -37,6 +46,15 @@ func TestContainerOwnershipPredicates(t *testing.T) {
 	}
 	if isDiscoverableContainer(plain) {
 		t.Fatal("plain labels should not be discoverable")
+	}
+	if !isSwarmManagedContainer(swarm) {
+		t.Fatal("expected swarm labels to be detected")
+	}
+	if isDiscoverableContainer(swarm) {
+		t.Fatal("swarm containers should not be discoverable")
+	}
+	if isDiscoverableContainer(swarmWithCompose) {
+		t.Fatal("swarm containers should be ignored even when compose labels are present")
 	}
 }
 
@@ -91,6 +109,32 @@ func TestSelectContainerTargetIncludesAllInMixedWorkspace(t *testing.T) {
 		t.Fatalf("selectContainerTarget returned error: %v", err)
 	}
 	if len(selected) != 2 {
+		t.Fatalf("selected = %#v", selected)
+	}
+}
+
+func TestSelectContainerTargetSupportsWorkspaceContainerLeafByService(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{{ID: "a", Name: "csdev-anonymize-deletions-6496c91a-clickhouse-1", Service: "clickhouse", Project: "comment-slayer", Workspace: "anonymize-deletions"}}
+	selected, err := selectContainerTarget(containers, "workspace/comment-slayer/anonymize-deletions/clickhouse", targetMatchExact)
+	if err != nil {
+		t.Fatalf("selectContainerTarget returned error: %v", err)
+	}
+	if len(selected) != 1 || selected[0].ID != "a" {
+		t.Fatalf("selected = %#v", selected)
+	}
+}
+
+func TestSelectContainerTargetSupportsWorkspaceContainerLeafByName(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{{ID: "a", Name: "csdev-anonymize-deletions-6496c91a-clickhouse-1", Service: "clickhouse", Project: "comment-slayer", Workspace: "anonymize-deletions"}}
+	selected, err := selectContainerTarget(containers, "workspace/comment-slayer/anonymize-deletions/csdev-anonymize-deletions-6496c91a-clickhouse-1", targetMatchExact)
+	if err != nil {
+		t.Fatalf("selectContainerTarget returned error: %v", err)
+	}
+	if len(selected) != 1 || selected[0].ID != "a" {
 		t.Fatalf("selected = %#v", selected)
 	}
 }
@@ -188,5 +232,18 @@ func TestSelectManagedTargetRequiresWorkspacePathToStartWithProject(t *testing.T
 	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "feat-1-api", Project: "comment-slayer", Workspace: "feat-1", Running: true}}}
 	if _, err := selectManagedTarget(state, "workspace/feat-1", targetMatchExact); err == nil {
 		t.Fatal("expected managed workspace target without project/workspace segments to fail")
+	}
+}
+
+func TestSelectManagedTargetSupportsWorkspaceContainerLeafByService(t *testing.T) {
+	t.Parallel()
+
+	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "csdev-anonymize-deletions-6496c91a-clickhouse-1", Service: "clickhouse", Project: "comment-slayer", Workspace: "anonymize-deletions", Running: true}}}
+	selected, err := selectManagedTarget(state, "workspace/comment-slayer/anonymize-deletions/clickhouse", targetMatchExact)
+	if err != nil {
+		t.Fatalf("selectManagedTarget returned error: %v", err)
+	}
+	if len(selected.ContainerIDs) != 1 || selected.ContainerIDs[0] != "a" {
+		t.Fatalf("container ids = %#v", selected.ContainerIDs)
 	}
 }
