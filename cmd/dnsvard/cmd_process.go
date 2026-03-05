@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,13 +23,27 @@ import (
 	"github.com/comment-slayer/dnsvard/internal/runtimeprovider"
 )
 
+type targetMatchMode string
+
+const (
+	targetMatchExact  targetMatchMode = "exact"
+	targetMatchPrefix targetMatchMode = "prefix"
+	targetMatchRegex  targetMatchMode = "regex"
+)
+
 func newPSCommand(ctx context.Context, configPath *string) *cobra.Command {
+	prefix := false
+	regex := false
 	cmd := &cobra.Command{
 		Use:     "ps [target]",
 		Aliases: []string{"ls"},
 		Short:   "List dnsvard-managed runtime and docker workloads",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			mode, err := resolveTargetMatchMode(prefix, regex)
+			if err != nil {
+				return err
+			}
 			target, err := parsePSFilter(args)
 			if err != nil {
 				return err
@@ -44,7 +58,7 @@ func newPSCommand(ctx context.Context, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			state, err = filterManagedState(state, target)
+			state, err = filterManagedState(state, target, mode)
 			if err != nil {
 				return err
 			}
@@ -56,6 +70,8 @@ func newPSCommand(ctx context.Context, configPath *string) *cobra.Command {
 		},
 	}
 	cmd.ValidArgsFunction = completeManagedTargets(configPath, true, false)
+	cmd.Flags().BoolVar(&prefix, "prefix", false, "Match workspace segments by prefix")
+	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>) using regex")
 	return cmd
 }
 
@@ -70,7 +86,7 @@ func parsePSFilter(args []string) (string, error) {
 	return v, nil
 }
 
-func filterManagedState(state managedState, target string) (managedState, error) {
+func filterManagedState(state managedState, target string, mode targetMatchMode) (managedState, error) {
 	target = normalizePSFilterTarget(strings.TrimSpace(target))
 	if target == "" || target == "all" {
 		return state, nil
@@ -88,7 +104,7 @@ func filterManagedState(state managedState, target string) (managedState, error)
 		return managedState{Leases: matched}, nil
 	}
 
-	containers, err := filterContainersForPS(state.Containers, target)
+	containers, err := filterContainersForPS(state.Containers, target, mode)
 	if err != nil {
 		return managedState{}, err
 	}
@@ -116,7 +132,7 @@ func filterLeasesByPattern(leases []runtimeprovider.Lease, pattern string) []run
 	return out
 }
 
-func filterContainersForPS(containers []dockerContainer, target string) ([]dockerContainer, error) {
+func filterContainersForPS(containers []dockerContainer, target string, mode targetMatchMode) ([]dockerContainer, error) {
 	target = normalizePSFilterTarget(strings.TrimSpace(target))
 	if target == "" || target == "all" {
 		return append([]dockerContainer{}, containers...), nil
@@ -132,55 +148,27 @@ func filterContainersForPS(containers []dockerContainer, target string) ([]docke
 	}
 
 	out := []dockerContainer{}
-	if strings.HasPrefix(target, "project/") {
-		projectPattern := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(target, "project/")))
+	if selector, ok, err := parseWorkspaceSelector(target, mode); err != nil {
+		return nil, err
+	} else if ok {
+		projectMatcher, workspaceMatcher, pathMatcher, err := buildWorkspaceMatchers(selector, mode)
+		if err != nil {
+			return nil, err
+		}
 		for _, c := range containers {
-			project := strings.ToLower(identity.NormalizeLabel(c.Project))
-			if projectPattern == "" || matchTargetValue(project, projectPattern) {
-				out = addUnique(out, c)
-			}
-		}
-		if len(out) == 0 {
-			if projectPattern == "" {
-				return out, nil
-			}
-			return nil, fmt.Errorf("project %q not found", strings.TrimPrefix(target, "project/"))
-		}
-		return out, nil
-	}
-
-	if strings.HasPrefix(target, "workspace/") {
-		raw := strings.TrimSpace(strings.TrimPrefix(target, "workspace/"))
-		workspacePattern := raw
-		projectPattern := ""
-		if raw != "" && !strings.Contains(raw, "@") {
-			return nil, fmt.Errorf("workspace target %q must include project: workspace/<workspace>@<project>", raw)
-		}
-		if at := strings.Index(raw, "@"); at >= 0 {
-			workspacePattern = strings.TrimSpace(raw[:at])
-			projectPattern = strings.TrimSpace(raw[at+1:])
-			if workspacePattern == "" || projectPattern == "" {
-				return nil, fmt.Errorf("workspace target %q must include workspace and project: workspace/<workspace>@<project>", raw)
-			}
-		}
-		workspacePattern = strings.ToLower(workspacePattern)
-		projectPattern = strings.ToLower(projectPattern)
-		for _, c := range containers {
-			workspace := strings.ToLower(identity.NormalizeLabel(c.Workspace))
-			project := strings.ToLower(identity.NormalizeLabel(c.Project))
-			if workspacePattern != "" && !matchTargetValue(workspace, workspacePattern) {
+			if pathMatcher != nil && !pathMatcher(c.Project, c.Workspace) {
 				continue
 			}
-			if projectPattern != "" && !matchTargetValue(project, projectPattern) {
+			if projectMatcher != nil && !projectMatcher(c.Project) {
+				continue
+			}
+			if workspaceMatcher != nil && !workspaceMatcher(c.Workspace) {
 				continue
 			}
 			out = addUnique(out, c)
 		}
 		if len(out) == 0 {
-			if workspacePattern == "" && projectPattern == "" {
-				return out, nil
-			}
-			return nil, fmt.Errorf("workspace %q not found", raw)
+			return nil, fmt.Errorf("workspace target %q not found", selector.raw)
 		}
 		return out, nil
 	}
@@ -203,11 +191,20 @@ func filterContainersForPS(containers []dockerContainer, target string) ([]docke
 		return out, nil
 	}
 
+	if mode == targetMatchRegex {
+		return nil, usageError("--regex is supported for workspace targets only")
+	}
 	needle := strings.ToLower(target)
 	for _, c := range containers {
 		name := strings.ToLower(strings.TrimSpace(c.Name))
 		id := strings.ToLower(strings.TrimSpace(c.ID))
-		if matchTargetValue(name, needle) || matchTargetValue(id, needle) {
+		if mode == targetMatchPrefix {
+			if strings.HasPrefix(name, needle) || strings.HasPrefix(id, needle) {
+				out = addUnique(out, c)
+			}
+			continue
+		}
+		if name == needle || strings.HasPrefix(id, needle) {
 			out = addUnique(out, c)
 		}
 	}
@@ -221,8 +218,6 @@ func filterContainersForPS(containers []dockerContainer, target string) ([]docke
 func normalizePSFilterTarget(target string) string {
 	target = strings.TrimSpace(target)
 	switch target {
-	case "project":
-		return "project/"
 	case "workspace":
 		return "workspace/"
 	case "container":
@@ -232,6 +227,128 @@ func normalizePSFilterTarget(target string) string {
 	default:
 		return target
 	}
+}
+
+type workspaceSelector struct {
+	raw       string
+	project   string
+	workspace string
+}
+
+func parseWorkspaceSelector(target string, mode targetMatchMode) (workspaceSelector, bool, error) {
+	target = strings.TrimSpace(target)
+	if target == "workspace" {
+		return workspaceSelector{raw: "workspace/"}, true, nil
+	}
+	if !strings.HasPrefix(target, "workspace/") {
+		return workspaceSelector{}, false, nil
+	}
+	raw := strings.TrimSpace(strings.TrimPrefix(target, "workspace/"))
+	if raw == "" {
+		return workspaceSelector{raw: "workspace/"}, true, nil
+	}
+	if mode == targetMatchRegex {
+		return workspaceSelector{raw: raw}, true, nil
+	}
+	parts := strings.Split(raw, "/")
+	if len(parts) > 2 {
+		return workspaceSelector{}, true, usageError("workspace target must be workspace[/<project>[/<workspace>]")
+	}
+	project := strings.TrimSpace(parts[0])
+	if project == "" {
+		return workspaceSelector{}, true, usageError("workspace target requires project segment: workspace/<project>[/<workspace>]")
+	}
+	selector := workspaceSelector{raw: raw, project: project}
+	if len(parts) == 2 {
+		workspace := strings.TrimSpace(parts[1])
+		if workspace == "" {
+			return workspaceSelector{}, true, usageError("workspace target requires workspace segment after project: workspace/<project>/<workspace>")
+		}
+		selector.workspace = workspace
+	}
+	return selector, true, nil
+}
+
+func buildWorkspaceMatchers(selector workspaceSelector, mode targetMatchMode) (func(string) bool, func(string) bool, func(string, string) bool, error) {
+	if mode == targetMatchRegex {
+		pattern := strings.TrimSpace(selector.raw)
+		if pattern == "" || pattern == "/" {
+			return nil, nil, nil, nil
+		}
+		wrapped := "^(?:" + pattern + ")$"
+		re, err := regexp.Compile(wrapped)
+		if err != nil {
+			return nil, nil, nil, usageError(fmt.Sprintf("invalid regex %q: %v", pattern, err))
+		}
+		return nil, nil, func(project string, workspace string) bool {
+			return re.MatchString(identity.NormalizeLabel(project) + "/" + identity.NormalizeLabel(workspace))
+		}, nil
+	}
+
+	projectMatcher := func(string) bool { return true }
+	workspaceMatcher := func(string) bool { return true }
+	var err error
+	if selector.project != "" {
+		projectMatcher, err = buildValueMatcher(selector.project, mode)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	if selector.workspace != "" {
+		workspaceMatcher, err = buildValueMatcher(selector.workspace, mode)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	if selector.project == "" {
+		projectMatcher = nil
+	}
+	if selector.workspace == "" {
+		workspaceMatcher = nil
+	}
+	return projectMatcher, workspaceMatcher, nil, nil
+}
+
+func buildValueMatcher(pattern string, mode targetMatchMode) (func(string) bool, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil, usageError("match pattern must be non-empty")
+	}
+	switch mode {
+	case targetMatchExact:
+		normalized := identity.NormalizeLabel(pattern)
+		if normalized == "" {
+			return nil, usageError("match pattern must include at least one label character")
+		}
+		return func(value string) bool { return identity.NormalizeLabel(value) == normalized }, nil
+	case targetMatchPrefix:
+		normalized := identity.NormalizeLabel(pattern)
+		if normalized == "" {
+			return nil, usageError("match pattern must include at least one label character")
+		}
+		return func(value string) bool { return strings.HasPrefix(identity.NormalizeLabel(value), normalized) }, nil
+	case targetMatchRegex:
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, usageError(fmt.Sprintf("invalid regex %q: %v", pattern, err))
+		}
+		return func(value string) bool { return re.MatchString(identity.NormalizeLabel(value)) }, nil
+	default:
+		return nil, usageError(fmt.Sprintf("unsupported match mode %q", mode))
+	}
+}
+
+func resolveTargetMatchMode(prefix bool, regex bool) (targetMatchMode, error) {
+	if prefix && regex {
+		return "", usageError("--prefix and --regex are mutually exclusive")
+	}
+	if prefix {
+		return targetMatchPrefix, nil
+	}
+	if regex {
+		return targetMatchRegex, nil
+	}
+	return targetMatchExact, nil
 }
 
 func matchTargetValue(value string, pattern string) bool {
@@ -357,26 +474,33 @@ func newRemoveCommand(ctx context.Context, configPath *string) *cobra.Command {
 	dryRun := false
 	yes := false
 	force := false
+	prefix := false
+	regex := false
 	cmd := &cobra.Command{
 		Use:   "rm <target>",
 		Short: "Remove dnsvard-managed containers",
 		Long: strings.Join([]string{
 			"Targets:",
 			"- container/<name-or-id>",
-			"- workspace/<workspace>@<project>",
-			"- project/<project>",
+			"- workspace[/<project>[/<workspace>]]",
 			"- all (requires --yes)",
 		}, "\n"),
 		Example: strings.Join([]string{
 			"  dnsvard rm container/feat-1-api-1",
-			"  dnsvard rm workspace/feat-1@project-name",
-			"  dnsvard rm project/project-name",
+			"  dnsvard rm workspace/comment-slayer/anonymize-deletions",
+			"  dnsvard rm workspace/comment-slayer",
+			"  dnsvard rm --prefix workspace/comment",
+			"  dnsvard rm --regex workspace/comment-slayer/feat-.*",
 			"  dnsvard rm all --yes",
 			"  dnsvard rm all --yes --dry-run",
-			"  dnsvard rm workspace/feat-1@project-name --force",
+			"  dnsvard rm workspace/comment-slayer/anonymize-deletions --force",
 		}, "\n"),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			mode, err := resolveTargetMatchMode(prefix, regex)
+			if err != nil {
+				return err
+			}
 			if len(args) == 0 {
 				return cmd.Help()
 			}
@@ -392,7 +516,7 @@ func newRemoveCommand(ctx context.Context, configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			selected, err := selectContainerTarget(containers, target)
+			selected, err := selectContainerTarget(containers, target, mode)
 			if err != nil {
 				return err
 			}
@@ -439,6 +563,8 @@ func newRemoveCommand(ctx context.Context, configPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be removed without applying changes")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive all-target operation")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force-remove running containers")
+	cmd.Flags().BoolVar(&prefix, "prefix", false, "Match workspace segments by prefix")
+	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>) using regex")
 	return cmd
 }
 
@@ -446,6 +572,8 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 
 	dryRun := false
 	yes := false
+	prefix := false
+	regex := false
 	cmd := &cobra.Command{
 		Use:   name + " <target>",
 		Short: fmt.Sprintf("%s dnsvard-managed workloads", commandTitle(name)),
@@ -453,20 +581,25 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 			"Targets:",
 			"- lease/<id>",
 			"- container/<name-or-id>",
-			"- workspace/<workspace>@<project>",
-			"- project/<project>",
+			"- workspace[/<project>[/<workspace>]]",
 			"- all (requires --yes)",
 		}, "\n"),
 		Example: strings.Join([]string{
 			fmt.Sprintf("  dnsvard %s lease/run-a1b2c3", name),
 			fmt.Sprintf("  dnsvard %s container/feat-1-api-1", name),
-			fmt.Sprintf("  dnsvard %s workspace/feat-1@project-name", name),
-			fmt.Sprintf("  dnsvard %s project/project-name", name),
+			fmt.Sprintf("  dnsvard %s workspace/comment-slayer/anonymize-deletions", name),
+			fmt.Sprintf("  dnsvard %s workspace/comment-slayer", name),
+			fmt.Sprintf("  dnsvard %s --prefix workspace/comment", name),
+			fmt.Sprintf("  dnsvard %s --regex workspace/comment-slayer/feat-.*", name),
 			fmt.Sprintf("  dnsvard %s all --yes", name),
 			fmt.Sprintf("  dnsvard %s all --yes --dry-run", name),
 		}, "\n"),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			mode, err := resolveTargetMatchMode(prefix, regex)
+			if err != nil {
+				return err
+			}
 			if len(args) == 0 {
 				return cmd.Help()
 			}
@@ -485,7 +618,7 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 			if warn != "" {
 				fmt.Printf("warning: %s\n", warn)
 			}
-			selection, err := selectManagedTarget(state, target)
+			selection, err := selectManagedTarget(state, target, mode)
 			if err != nil {
 				return err
 			}
@@ -538,6 +671,8 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 	cmd.ValidArgsFunction = completeManagedTargets(configPath, true, true)
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be signaled without applying changes")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive all-target operation")
+	cmd.Flags().BoolVar(&prefix, "prefix", false, "Match workspace segments by prefix")
+	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>) using regex")
 	return cmd
 }
 
@@ -546,7 +681,7 @@ func completeManagedTargets(configPath *string, includeLeases bool, runningOnly 
 		if len(args) > 0 {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
-		candidates := []string{"all", "container/", "workspace/", "project/"}
+		candidates := []string{"all", "container/", "workspace/"}
 		if includeLeases {
 			candidates = append(candidates, "lease/")
 		}
@@ -573,7 +708,7 @@ func completeManagedTargets(configPath *string, includeLeases bool, runningOnly 
 		}
 
 		candidates = append(candidates, managedTargetSuggestions(state, includeLeases, runningOnly)...)
-		return filterCompletionCandidates(candidates, args, toComplete), cobra.ShellCompDirectiveNoFileComp
+		return filterCompletionCandidates(candidates, toComplete), cobra.ShellCompDirectiveNoFileComp
 	}
 }
 
@@ -586,20 +721,24 @@ func managedTargetSuggestions(state managedState, includeLeases bool, runningOnl
 		}
 		seen[v] = struct{}{}
 	}
+	workspaceCountByProject := map[string]int{}
 	for _, c := range state.Containers {
 		if runningOnly && !c.Running {
 			continue
 		}
+		project := identity.NormalizeLabel(c.Project)
+		workspace := identity.NormalizeLabel(c.Workspace)
 		if name := strings.TrimSpace(c.Name); name != "" {
 			add("container/" + name)
 		}
-		project := identity.NormalizeLabel(c.Project)
-		workspace := identity.NormalizeLabel(c.Workspace)
-		if project != "" {
-			add("project/" + project)
-		}
 		if workspace != "" && project != "" {
-			add(fmt.Sprintf("workspace/%s@%s", workspace, project))
+			add(fmt.Sprintf("workspace/%s/%s", project, workspace))
+			workspaceCountByProject[project]++
+		}
+	}
+	for project, workspaceCount := range workspaceCountByProject {
+		if workspaceCount > 1 {
+			add("workspace/" + project)
 		}
 	}
 	if includeLeases {
@@ -617,15 +756,8 @@ func managedTargetSuggestions(state managedState, includeLeases bool, runningOnl
 	return out
 }
 
-func filterCompletionCandidates(candidates []string, args []string, toComplete string) []string {
+func filterCompletionCandidates(candidates []string, toComplete string) []string {
 	prefix := strings.TrimSpace(toComplete)
-	if basePrefix, suffixPrefix, ok := splitWordbreakAtContext(args, toComplete); ok {
-		return filterCompletionSuffixCandidates(candidates, basePrefix, suffixPrefix)
-	}
-	return filterCompletionCandidatesByPrefix(candidates, prefix)
-}
-
-func filterCompletionCandidatesByPrefix(candidates []string, prefix string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(candidates))
 	for _, c := range candidates {
@@ -650,7 +782,7 @@ func filterCompletionCandidatesByPrefix(candidates []string, prefix string) []st
 func dropNamespacePlaceholders(candidates []string) []string {
 	namespaceHasSpecific := map[string]bool{}
 	for _, candidate := range candidates {
-		for _, namespace := range []string{"container/", "workspace/", "project/", "lease/"} {
+		for _, namespace := range []string{"container/", "workspace/", "lease/"} {
 			if strings.HasPrefix(candidate, namespace) && candidate != namespace {
 				namespaceHasSpecific[namespace] = true
 			}
@@ -667,77 +799,6 @@ func dropNamespacePlaceholders(candidates []string) []string {
 		out = append(out, candidate)
 	}
 	return out
-}
-
-func filterCompletionSuffixCandidates(candidates []string, basePrefix string, suffixPrefix string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		c = strings.TrimSpace(c)
-		if c == "" || !strings.HasPrefix(c, basePrefix) {
-			continue
-		}
-		suffix := strings.TrimPrefix(c, basePrefix)
-		if suffix == "" {
-			continue
-		}
-		if suffixPrefix != "" && !strings.HasPrefix(suffix, suffixPrefix) {
-			continue
-		}
-		if _, ok := seen[suffix]; ok {
-			continue
-		}
-		seen[suffix] = struct{}{}
-		out = append(out, suffix)
-	}
-	if len(out) == 0 {
-		return filterCompletionCandidatesByPrefix(candidates, suffixPrefix)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func splitWordbreakAtContext(args []string, toComplete string) (basePrefix string, suffixPrefix string, ok bool) {
-	if strings.Contains(toComplete, "@") {
-		return "", "", false
-	}
-	line := strings.TrimSpace(os.Getenv("COMP_LINE"))
-	if line == "" {
-		return "", "", false
-	}
-	pointText := strings.TrimSpace(os.Getenv("COMP_POINT"))
-	if pointText != "" {
-		if point, err := strconv.Atoi(pointText); err == nil {
-			if point >= 0 && point <= len(line) {
-				line = line[:point]
-			}
-		}
-	}
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return "", "", false
-	}
-	current := fields[len(fields)-1]
-	if current == "" || !strings.Contains(current, "@") {
-		return "", "", false
-	}
-	atIdx := strings.LastIndex(current, "@")
-	if atIdx <= 0 {
-		return "", "", false
-	}
-	basePrefix = current[:atIdx+1]
-	suffixPrefix = current[atIdx+1:]
-	if strings.TrimSpace(toComplete) != suffixPrefix {
-		return "", "", false
-	}
-	if len(args) > 0 {
-		arg := strings.TrimSpace(args[0])
-		baseNoAt := strings.TrimSuffix(basePrefix, "@")
-		if arg != baseNoAt && arg != basePrefix {
-			return "", "", false
-		}
-	}
-	return basePrefix, suffixPrefix, true
 }
 
 type managedState struct {
@@ -831,10 +892,10 @@ type managedStatePrintOptions struct {
 }
 
 func psFilterDisplayOptions(target string, state managedState) managedStatePrintOptions {
-	target = strings.TrimSpace(target)
+	_ = state
+	target = normalizePSFilterTarget(strings.TrimSpace(target))
 	if target != "" && target != "all" {
-		target = normalizePSFilterTarget(target)
-		if strings.HasPrefix(target, "project/") && managedProjectCount(state) > 1 {
+		if target == "workspace/" {
 			return managedStatePrintOptions{GroupByProject: true}
 		}
 		return managedStatePrintOptions{GroupByProject: false, IncludeWorkspaceContainerCount: true}
@@ -934,7 +995,7 @@ func printManagedStateWithRuntimeDomainsTo(out io.Writer, cfg config.Config, sta
 					return node.containers[i].Service < node.containers[j].Service
 				})
 				domain := workspaceDisplayDomainWithRuntimeState(workspaceDomainDisplayInput{Cfg: cfg, Project: node.project, Workspace: node.workspace, WorkspaceDomains: workspaceDomains, RuntimeAuthoritative: runtimeAuthoritative})
-				fmt.Fprintf(out, "  - [%s] workspace/%s@%s domain=%s containers=%d\n", aggregateWorkspaceStatus(node.containers), node.workspace, node.project, domain, len(node.containers))
+				fmt.Fprintf(out, "  - [%s] workspace/%s/%s domain=%s containers=%d\n", aggregateWorkspaceStatus(node.containers), node.project, node.workspace, domain, len(node.containers))
 				for _, container := range node.containers {
 					fmt.Fprintf(out, "    - [%s] container/%s service=%s\n", containerMarker(container), container.Name, container.Service)
 				}
@@ -953,9 +1014,9 @@ func printManagedStateWithRuntimeDomainsTo(out io.Writer, cfg config.Config, sta
 		})
 		domain := workspaceDisplayDomainWithRuntimeState(workspaceDomainDisplayInput{Cfg: cfg, Project: node.project, Workspace: node.workspace, WorkspaceDomains: workspaceDomains, RuntimeAuthoritative: runtimeAuthoritative})
 		if options.IncludeWorkspaceContainerCount {
-			fmt.Fprintf(out, "- [%s] workspace/%s@%s domain=%s containers=%d\n", aggregateWorkspaceStatus(node.containers), node.workspace, node.project, domain, len(node.containers))
+			fmt.Fprintf(out, "- [%s] workspace/%s/%s domain=%s containers=%d\n", aggregateWorkspaceStatus(node.containers), node.project, node.workspace, domain, len(node.containers))
 		} else {
-			fmt.Fprintf(out, "- [%s] workspace/%s@%s domain=%s\n", aggregateWorkspaceStatus(node.containers), node.workspace, node.project, domain)
+			fmt.Fprintf(out, "- [%s] workspace/%s/%s domain=%s\n", aggregateWorkspaceStatus(node.containers), node.project, node.workspace, domain)
 		}
 		for _, container := range node.containers {
 			fmt.Fprintf(out, "  - [%s] container/%s service=%s\n", containerMarker(container), container.Name, container.Service)
@@ -1018,7 +1079,7 @@ func workspaceDisplayDomain(cfg config.Config, project string, workspace string)
 	return hosts.WorkspaceFQDN
 }
 
-func selectManagedTarget(state managedState, target string) (managedSelection, error) {
+func selectManagedTarget(state managedState, target string, mode targetMatchMode) (managedSelection, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return managedSelection{}, usageError("target is required")
@@ -1062,12 +1123,26 @@ func selectManagedTarget(state managedState, target string) (managedSelection, e
 		return managedSelection{}, fmt.Errorf("container %q not found", needle)
 	}
 
-	if strings.HasPrefix(target, "project/") {
-		project := identity.NormalizeLabel(strings.TrimPrefix(target, "project/"))
+	if selector, ok, err := parseWorkspaceSelector(target, mode); err != nil {
+		return managedSelection{}, err
+	} else if ok {
+		projectMatcher, workspaceMatcher, pathMatcher, matcherErr := buildWorkspaceMatchers(selector, mode)
+		if matcherErr != nil {
+			return managedSelection{}, matcherErr
+		}
 		ids := []string{}
 		seen := map[string]struct{}{}
 		for _, c := range state.Containers {
-			if identity.NormalizeLabel(c.Project) != project || !c.Running {
+			if !c.Running {
+				continue
+			}
+			if pathMatcher != nil && !pathMatcher(c.Project, c.Workspace) {
+				continue
+			}
+			if projectMatcher != nil && !projectMatcher(c.Project) {
+				continue
+			}
+			if workspaceMatcher != nil && !workspaceMatcher(c.Workspace) {
 				continue
 			}
 			if _, ok := seen[c.ID]; ok {
@@ -1078,45 +1153,7 @@ func selectManagedTarget(state managedState, target string) (managedSelection, e
 		}
 		sort.Strings(ids)
 		if len(ids) == 0 {
-			return managedSelection{}, fmt.Errorf("project %q not found", project)
-		}
-		return managedSelection{ContainerIDs: ids}, nil
-	}
-
-	if strings.HasPrefix(target, "workspace/") {
-		raw := strings.TrimPrefix(target, "workspace/")
-		if strings.TrimSpace(raw) != "" && !strings.Contains(raw, "@") {
-			return managedSelection{}, fmt.Errorf("workspace target %q must include project: workspace/<workspace>@<project>", raw)
-		}
-		workspace := raw
-		project := ""
-		if at := strings.Index(raw, "@"); at >= 0 {
-			workspace = raw[:at]
-			project = raw[at+1:]
-			if strings.TrimSpace(workspace) == "" || strings.TrimSpace(project) == "" {
-				return managedSelection{}, fmt.Errorf("workspace target %q must include workspace and project: workspace/<workspace>@<project>", raw)
-			}
-		}
-		workspace = identity.NormalizeLabel(workspace)
-		project = identity.NormalizeLabel(project)
-		ids := []string{}
-		seen := map[string]struct{}{}
-		for _, c := range state.Containers {
-			if identity.NormalizeLabel(c.Workspace) != workspace || !c.Running {
-				continue
-			}
-			if project != "" && identity.NormalizeLabel(c.Project) != project {
-				continue
-			}
-			if _, ok := seen[c.ID]; ok {
-				continue
-			}
-			seen[c.ID] = struct{}{}
-			ids = append(ids, c.ID)
-		}
-		sort.Strings(ids)
-		if len(ids) == 0 {
-			return managedSelection{}, fmt.Errorf("workspace %q not found", raw)
+			return managedSelection{}, fmt.Errorf("workspace target %q not found", selector.raw)
 		}
 		return managedSelection{ContainerIDs: ids}, nil
 	}
@@ -1320,8 +1357,8 @@ func deriveWorkspaceLabel(labels map[string]string) string {
 	return identity.NormalizeLabel(labels["com.docker.compose.project"])
 }
 
-func selectContainerTarget(containers []dockerContainer, target string) ([]dockerContainer, error) {
-	return filterContainersForPS(containers, target)
+func selectContainerTarget(containers []dockerContainer, target string, mode targetMatchMode) ([]dockerContainer, error) {
+	return filterContainersForPS(containers, target, mode)
 }
 
 func resolveDockerCLIPath() (string, error) {

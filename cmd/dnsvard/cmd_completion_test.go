@@ -107,9 +107,6 @@ func TestCompletionScriptBashIncludesCompatShim(t *testing.T) {
 	if !strings.Contains(script, "_get_comp_words_by_ref") {
 		t.Fatalf("bash script missing compatibility shim")
 	}
-	if !strings.Contains(script, "COMP_WORDBREAKS=${COMP_WORDBREAKS//[@]/}") {
-		t.Fatalf("bash script missing COMP_WORDBREAKS @ handling")
-	}
 	if !strings.Contains(script, "__start_dnsvard") {
 		t.Fatalf("bash script missing generated cobra completion function")
 	}
