@@ -367,6 +367,15 @@ func TestParsePSFilterAcceptsWorkspaceTarget(t *testing.T) {
 	}
 }
 
+func TestFilterManagedStateWorkspaceRequiresProject(t *testing.T) {
+	t.Parallel()
+
+	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "feat-1-api-1", Project: "breadstick", Workspace: "feat-1", Running: true}}}
+	if _, err := filterManagedState(state, "workspace/feat-1"); err == nil {
+		t.Fatal("expected workspace target without @project to fail")
+	}
+}
+
 func TestFilterManagedStateProjectPrefixMatch(t *testing.T) {
 	t.Parallel()
 

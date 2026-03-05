@@ -147,3 +147,21 @@ func TestSelectContainerTargetSupportsProjectShorthand(t *testing.T) {
 		t.Fatalf("selected(project/) = %#v", selectedSlash)
 	}
 }
+
+func TestSelectContainerTargetRequiresExplicitWorkspaceProject(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{{ID: "a", Name: "feat-1-api", Project: "comment-slayer", Workspace: "feat-1"}}
+	if _, err := selectContainerTarget(containers, "workspace/feat-1"); err == nil {
+		t.Fatal("expected workspace target without @project to fail")
+	}
+}
+
+func TestSelectManagedTargetRequiresExplicitWorkspaceProject(t *testing.T) {
+	t.Parallel()
+
+	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "feat-1-api", Project: "comment-slayer", Workspace: "feat-1", Running: true}}}
+	if _, err := selectManagedTarget(state, "workspace/feat-1"); err == nil {
+		t.Fatal("expected managed workspace target without @project to fail")
+	}
+}
