@@ -467,3 +467,53 @@ func TestPrintManagedStateWorkspaceRootFilterShowsProjectTreeWhenMultipleProject
 		t.Fatalf("project heading missing for comment-slayer:\n%s", out.String())
 	}
 }
+
+func TestFilterManagedStateSupportsWorkspaceContainerLeafByService(t *testing.T) {
+	t.Parallel()
+
+	state := managedState{Containers: []dockerContainer{
+		{ID: "a", Name: "csdev-anonymize-deletions-6496c91a-clickhouse-1", Service: "clickhouse", Project: "comment-slayer", Workspace: "anonymize-deletions", Running: true},
+		{ID: "b", Name: "csdev-anonymize-deletions-6496c91a-api-1", Service: "api", Project: "comment-slayer", Workspace: "anonymize-deletions", Running: true},
+	}}
+
+	filtered, err := filterManagedState(state, "workspace/comment-slayer/anonymize-deletions/clickhouse", targetMatchExact)
+	if err != nil {
+		t.Fatalf("filterManagedState: %v", err)
+	}
+	if len(filtered.Containers) != 1 || filtered.Containers[0].ID != "a" {
+		t.Fatalf("filtered containers = %#v", filtered.Containers)
+	}
+}
+
+func TestFilterManagedStateSupportsWorkspaceContainerLeafByName(t *testing.T) {
+	t.Parallel()
+
+	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "csdev-anonymize-deletions-6496c91a-clickhouse-1", Service: "clickhouse", Project: "comment-slayer", Workspace: "anonymize-deletions", Running: true}}}
+	filtered, err := filterManagedState(state, "workspace/comment-slayer/anonymize-deletions/csdev-anonymize-deletions-6496c91a-clickhouse-1", targetMatchExact)
+	if err != nil {
+		t.Fatalf("filterManagedState: %v", err)
+	}
+	if len(filtered.Containers) != 1 || filtered.Containers[0].ID != "a" {
+		t.Fatalf("filtered containers = %#v", filtered.Containers)
+	}
+}
+
+func TestPrintManagedStateNameOnlyOutputsCanonicalContainerTargets(t *testing.T) {
+	t.Parallel()
+
+	state := managedState{Containers: []dockerContainer{
+		{ID: "a", Name: "csdev-anonymize-deletions-6496c91a-clickhouse-1", Service: "clickhouse", Project: "comment-slayer", Workspace: "anonymize-deletions", Running: true},
+		{ID: "b", Name: "csdev-anonymize-deletions-6496c91a-api-1", Service: "api", Project: "comment-slayer", Workspace: "anonymize-deletions", Running: true},
+	}}
+
+	var out bytes.Buffer
+	printManagedStateNameOnlyTo(&out, state)
+	got := strings.TrimSpace(out.String())
+	want := strings.Join([]string{
+		"workspace/comment-slayer/anonymize-deletions/csdev-anonymize-deletions-6496c91a-api-1",
+		"workspace/comment-slayer/anonymize-deletions/csdev-anonymize-deletions-6496c91a-clickhouse-1",
+	}, "\n")
+	if got != want {
+		t.Fatalf("name-only output = %q, want %q", got, want)
+	}
+}

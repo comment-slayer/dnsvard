@@ -22,6 +22,7 @@ func TestManagedTargetSuggestionsIncludeProjectWorkspaceAndLease(t *testing.T) {
 		"container/feat-1-api-1",
 		"lease/run-a1",
 		"workspace/project-name/feat-1",
+		"workspace/project-name/feat-1/feat-1-api-1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("managedTargetSuggestions = %#v, want %#v", got, want)
@@ -42,6 +43,7 @@ func TestManagedTargetSuggestionsRunningOnlyFiltersStopped(t *testing.T) {
 	want := []string{
 		"container/running-api",
 		"workspace/project-name/feat-1",
+		"workspace/project-name/feat-1/running-api",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("managedTargetSuggestions runningOnly = %#v, want %#v", got, want)
@@ -86,9 +88,21 @@ func TestManagedTargetSuggestionsAddsProjectScopeOnlyWhenProjectHasMultipleWorks
 		"container/fix-api",
 		"workspace/comment-slayer",
 		"workspace/comment-slayer/feat-1",
+		"workspace/comment-slayer/feat-1/feat-api",
 		"workspace/comment-slayer/fix-1",
+		"workspace/comment-slayer/fix-1/fix-api",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("managedTargetSuggestions = %#v, want %#v", got, want)
+	}
+}
+
+func TestFilterCompletionCandidatesIncludesWorkspaceContainerLeafTargets(t *testing.T) {
+	t.Parallel()
+
+	got := filterCompletionCandidates([]string{"workspace/comment-slayer/anonymize-deletions", "workspace/comment-slayer/anonymize-deletions/csdev-anonymize-deletions-6496c91a-clickhouse-1"}, "workspace/comment-slayer/anonymize-deletions/c")
+	want := []string{"workspace/comment-slayer/anonymize-deletions/csdev-anonymize-deletions-6496c91a-clickhouse-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("filterCompletionCandidates = %#v, want %#v", got, want)
 	}
 }

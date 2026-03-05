@@ -34,11 +34,27 @@ const (
 func newPSCommand(ctx context.Context, configPath *string) *cobra.Command {
 	prefix := false
 	regex := false
+	nameOnly := false
 	cmd := &cobra.Command{
 		Use:     "ps [target]",
 		Aliases: []string{"ls"},
 		Short:   "List dnsvard-managed runtime and docker workloads",
-		Args:    cobra.MaximumNArgs(1),
+		Long: strings.Join([]string{
+			"Targets:",
+			"- workspace[/<project>[/<workspace>[/<container>]]]",
+			"- container/<name-or-id>",
+			"- lease/<id>",
+			"- all",
+		}, "\n"),
+		Example: strings.Join([]string{
+			"  dnsvard ps",
+			"  dnsvard ps workspace/comment-slayer",
+			"  dnsvard ps workspace/comment-slayer/anonymize-deletions/clickhouse",
+			"  dnsvard ps --prefix workspace/comment",
+			"  dnsvard ps --regex 'workspace/comment-slayer/feat-.*'",
+			"  dnsvard ps --name-only workspace/comment-slayer/anonymize-deletions",
+		}, "\n"),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			mode, err := resolveTargetMatchMode(prefix, regex)
 			if err != nil {
@@ -65,13 +81,18 @@ func newPSCommand(ctx context.Context, configPath *string) *cobra.Command {
 			if warn != "" {
 				fmt.Printf("warning: %s\n", warn)
 			}
+			if nameOnly {
+				printManagedStateNameOnly(state)
+				return nil
+			}
 			printManagedStateWithRuntimeDomainsAndOptions(cfg, state, workspaceDomains, runtimeAuthoritative, psFilterDisplayOptions(target, state))
 			return nil
 		},
 	}
 	cmd.ValidArgsFunction = completeManagedTargets(configPath, true, false)
 	cmd.Flags().BoolVar(&prefix, "prefix", false, "Match workspace segments by prefix")
-	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>) using regex")
+	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>[/<container>]) using regex")
+	cmd.Flags().BoolVar(&nameOnly, "name-only", false, "Print container targets only: workspace/<project>/<workspace>/<container>")
 	return cmd
 }
 
@@ -151,18 +172,12 @@ func filterContainersForPS(containers []dockerContainer, target string, mode tar
 	if selector, ok, err := parseWorkspaceSelector(target, mode); err != nil {
 		return nil, err
 	} else if ok {
-		projectMatcher, workspaceMatcher, pathMatcher, err := buildWorkspaceMatchers(selector, mode)
+		matcher, err := buildWorkspaceMatcher(selector, mode)
 		if err != nil {
 			return nil, err
 		}
 		for _, c := range containers {
-			if pathMatcher != nil && !pathMatcher(c.Project, c.Workspace) {
-				continue
-			}
-			if projectMatcher != nil && !projectMatcher(c.Project) {
-				continue
-			}
-			if workspaceMatcher != nil && !workspaceMatcher(c.Workspace) {
+			if !matcher(c) {
 				continue
 			}
 			out = addUnique(out, c)
@@ -233,6 +248,7 @@ type workspaceSelector struct {
 	raw       string
 	project   string
 	workspace string
+	container string
 }
 
 func parseWorkspaceSelector(target string, mode targetMatchMode) (workspaceSelector, bool, error) {
@@ -251,62 +267,109 @@ func parseWorkspaceSelector(target string, mode targetMatchMode) (workspaceSelec
 		return workspaceSelector{raw: raw}, true, nil
 	}
 	parts := strings.Split(raw, "/")
-	if len(parts) > 2 {
-		return workspaceSelector{}, true, usageError("workspace target must be workspace[/<project>[/<workspace>]")
+	if len(parts) > 3 {
+		return workspaceSelector{}, true, usageError("workspace target must be workspace[/<project>[/<workspace>[/<container>]]]")
 	}
 	project := strings.TrimSpace(parts[0])
 	if project == "" {
-		return workspaceSelector{}, true, usageError("workspace target requires project segment: workspace/<project>[/<workspace>]")
+		return workspaceSelector{}, true, usageError("workspace target requires project segment: workspace/<project>[/<workspace>[/<container>]]")
 	}
 	selector := workspaceSelector{raw: raw, project: project}
-	if len(parts) == 2 {
+	if len(parts) >= 2 {
 		workspace := strings.TrimSpace(parts[1])
 		if workspace == "" {
-			return workspaceSelector{}, true, usageError("workspace target requires workspace segment after project: workspace/<project>/<workspace>")
+			return workspaceSelector{}, true, usageError("workspace target requires workspace segment after project: workspace/<project>/<workspace>[/<container>]")
 		}
 		selector.workspace = workspace
+	}
+	if len(parts) == 3 {
+		container := strings.TrimSpace(parts[2])
+		if container == "" {
+			return workspaceSelector{}, true, usageError("workspace target requires container segment after workspace: workspace/<project>/<workspace>/<container>")
+		}
+		selector.container = container
 	}
 	return selector, true, nil
 }
 
-func buildWorkspaceMatchers(selector workspaceSelector, mode targetMatchMode) (func(string) bool, func(string) bool, func(string, string) bool, error) {
+func buildWorkspaceMatcher(selector workspaceSelector, mode targetMatchMode) (func(dockerContainer) bool, error) {
 	if mode == targetMatchRegex {
 		pattern := strings.TrimSpace(selector.raw)
 		if pattern == "" || pattern == "/" {
-			return nil, nil, nil, nil
+			return func(dockerContainer) bool { return true }, nil
 		}
 		wrapped := "^(?:" + pattern + ")$"
 		re, err := regexp.Compile(wrapped)
 		if err != nil {
-			return nil, nil, nil, usageError(fmt.Sprintf("invalid regex %q: %v", pattern, err))
+			return nil, usageError(fmt.Sprintf("invalid regex %q: %v", pattern, err))
 		}
-		return nil, nil, func(project string, workspace string) bool {
-			return re.MatchString(identity.NormalizeLabel(project) + "/" + identity.NormalizeLabel(workspace))
+		return func(c dockerContainer) bool {
+			for _, path := range workspacePathCandidates(c) {
+				if re.MatchString(path) {
+					return true
+				}
+			}
+			return false
 		}, nil
 	}
 
 	projectMatcher := func(string) bool { return true }
 	workspaceMatcher := func(string) bool { return true }
+	containerMatcher := func(string, string) bool { return true }
 	var err error
 	if selector.project != "" {
 		projectMatcher, err = buildValueMatcher(selector.project, mode)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 	}
 	if selector.workspace != "" {
 		workspaceMatcher, err = buildValueMatcher(selector.workspace, mode)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 	}
-	if selector.project == "" {
-		projectMatcher = nil
+	if selector.container != "" {
+		valueMatcher, buildErr := buildValueMatcher(selector.container, mode)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		containerMatcher = func(service string, name string) bool {
+			if valueMatcher(service) {
+				return true
+			}
+			return valueMatcher(name)
+		}
 	}
-	if selector.workspace == "" {
-		workspaceMatcher = nil
+
+	return func(c dockerContainer) bool {
+		if !projectMatcher(c.Project) {
+			return false
+		}
+		if !workspaceMatcher(c.Workspace) {
+			return false
+		}
+		if !containerMatcher(c.Service, c.Name) {
+			return false
+		}
+		return true
+	}, nil
+}
+
+func workspacePathCandidates(c dockerContainer) []string {
+	project := identity.NormalizeLabel(c.Project)
+	workspace := identity.NormalizeLabel(c.Workspace)
+	if project == "" || workspace == "" {
+		return nil
 	}
-	return projectMatcher, workspaceMatcher, nil, nil
+	paths := []string{project + "/" + workspace}
+	if service := identity.NormalizeLabel(c.Service); service != "" {
+		paths = append(paths, project+"/"+workspace+"/"+service)
+	}
+	if name := strings.ToLower(strings.TrimSpace(c.Name)); name != "" {
+		paths = append(paths, project+"/"+workspace+"/"+name)
+	}
+	return paths
 }
 
 func buildValueMatcher(pattern string, mode targetMatchMode) (func(string) bool, error) {
@@ -482,12 +545,13 @@ func newRemoveCommand(ctx context.Context, configPath *string) *cobra.Command {
 		Long: strings.Join([]string{
 			"Targets:",
 			"- container/<name-or-id>",
-			"- workspace[/<project>[/<workspace>]]",
+			"- workspace[/<project>[/<workspace>[/<container>]]]",
 			"- all (requires --yes)",
 		}, "\n"),
 		Example: strings.Join([]string{
 			"  dnsvard rm container/feat-1-api-1",
 			"  dnsvard rm workspace/comment-slayer/anonymize-deletions",
+			"  dnsvard rm workspace/comment-slayer/anonymize-deletions/clickhouse",
 			"  dnsvard rm workspace/comment-slayer",
 			"  dnsvard rm --prefix workspace/comment",
 			"  dnsvard rm --regex 'workspace/comment-slayer/feat-.*'",
@@ -564,7 +628,7 @@ func newRemoveCommand(ctx context.Context, configPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive all-target operation")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force-remove running containers")
 	cmd.Flags().BoolVar(&prefix, "prefix", false, "Match workspace segments by prefix")
-	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>) using regex")
+	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>[/<container>]) using regex")
 	return cmd
 }
 
@@ -581,13 +645,14 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 			"Targets:",
 			"- lease/<id>",
 			"- container/<name-or-id>",
-			"- workspace[/<project>[/<workspace>]]",
+			"- workspace[/<project>[/<workspace>[/<container>]]]",
 			"- all (requires --yes)",
 		}, "\n"),
 		Example: strings.Join([]string{
 			fmt.Sprintf("  dnsvard %s lease/run-a1b2c3", name),
 			fmt.Sprintf("  dnsvard %s container/feat-1-api-1", name),
 			fmt.Sprintf("  dnsvard %s workspace/comment-slayer/anonymize-deletions", name),
+			fmt.Sprintf("  dnsvard %s workspace/comment-slayer/anonymize-deletions/clickhouse", name),
 			fmt.Sprintf("  dnsvard %s workspace/comment-slayer", name),
 			fmt.Sprintf("  dnsvard %s --prefix workspace/comment", name),
 			fmt.Sprintf("  dnsvard %s --regex 'workspace/comment-slayer/feat-.*'", name),
@@ -672,7 +737,7 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be signaled without applying changes")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive all-target operation")
 	cmd.Flags().BoolVar(&prefix, "prefix", false, "Match workspace segments by prefix")
-	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>) using regex")
+	cmd.Flags().BoolVar(&regex, "regex", false, "Match workspace path (<project>/<workspace>[/<container>]) using regex")
 	return cmd
 }
 
@@ -732,7 +797,11 @@ func managedTargetSuggestions(state managedState, includeLeases bool, runningOnl
 			add("container/" + name)
 		}
 		if workspace != "" && project != "" {
-			add(fmt.Sprintf("workspace/%s/%s", project, workspace))
+			workspaceTarget := fmt.Sprintf("workspace/%s/%s", project, workspace)
+			add(workspaceTarget)
+			if name := strings.ToLower(strings.TrimSpace(c.Name)); name != "" {
+				add(workspaceTarget + "/" + name)
+			}
 			workspaceCountByProject[project]++
 		}
 	}
@@ -880,6 +949,33 @@ func collectManagedState(ctx context.Context, cfg config.Config) (managedState, 
 
 func printManagedState(cfg config.Config, state managedState) {
 	printManagedStateWithRuntimeDomainsAndOptions(cfg, state, nil, false, managedStatePrintOptions{GroupByProject: true})
+}
+
+func printManagedStateNameOnly(state managedState) {
+	printManagedStateNameOnlyTo(os.Stdout, state)
+}
+
+func printManagedStateNameOnlyTo(out io.Writer, state managedState) {
+	targets := make([]string, 0, len(state.Containers))
+	seen := map[string]struct{}{}
+	for _, c := range state.Containers {
+		project := identity.NormalizeLabel(c.Project)
+		workspace := identity.NormalizeLabel(c.Workspace)
+		name := strings.ToLower(strings.TrimSpace(c.Name))
+		if project == "" || workspace == "" || name == "" {
+			continue
+		}
+		target := fmt.Sprintf("workspace/%s/%s/%s", project, workspace, name)
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	for _, target := range targets {
+		fmt.Fprintln(out, target)
+	}
 }
 
 func printManagedStateWithRuntimeDomains(cfg config.Config, state managedState, workspaceDomains map[string]string, runtimeAuthoritative bool) {
@@ -1126,7 +1222,7 @@ func selectManagedTarget(state managedState, target string, mode targetMatchMode
 	if selector, ok, err := parseWorkspaceSelector(target, mode); err != nil {
 		return managedSelection{}, err
 	} else if ok {
-		projectMatcher, workspaceMatcher, pathMatcher, matcherErr := buildWorkspaceMatchers(selector, mode)
+		matcher, matcherErr := buildWorkspaceMatcher(selector, mode)
 		if matcherErr != nil {
 			return managedSelection{}, matcherErr
 		}
@@ -1136,13 +1232,7 @@ func selectManagedTarget(state managedState, target string, mode targetMatchMode
 			if !c.Running {
 				continue
 			}
-			if pathMatcher != nil && !pathMatcher(c.Project, c.Workspace) {
-				continue
-			}
-			if projectMatcher != nil && !projectMatcher(c.Project) {
-				continue
-			}
-			if workspaceMatcher != nil && !workspaceMatcher(c.Workspace) {
+			if !matcher(c) {
 				continue
 			}
 			if _, ok := seen[c.ID]; ok {
@@ -1306,11 +1396,27 @@ func isDiscoverableContainer(labels map[string]string) bool {
 	if labels == nil {
 		return false
 	}
+	if isSwarmManagedContainer(labels) {
+		return false
+	}
 	if hasDnsvardLabel(labels) {
 		return true
 	}
 	if strings.TrimSpace(labels["com.docker.compose.project"]) != "" || strings.TrimSpace(labels["com.docker.compose.service"]) != "" || strings.TrimSpace(labels["com.docker.compose.project.working_dir"]) != "" {
 		return true
+	}
+	return false
+}
+
+func isSwarmManagedContainer(labels map[string]string) bool {
+	if labels == nil {
+		return false
+	}
+	for k := range labels {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if strings.HasPrefix(key, "com.docker.swarm.") || strings.HasPrefix(key, "com.docker.stack.") {
+			return true
+		}
 	}
 	return false
 }
