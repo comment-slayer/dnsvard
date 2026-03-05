@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -152,9 +153,15 @@ func filterContainersForPS(containers []dockerContainer, target string) ([]docke
 		raw := strings.TrimSpace(strings.TrimPrefix(target, "workspace/"))
 		workspacePattern := raw
 		projectPattern := ""
+		if raw != "" && !strings.Contains(raw, "@") {
+			return nil, fmt.Errorf("workspace target %q must include project: workspace/<workspace>@<project>", raw)
+		}
 		if at := strings.Index(raw, "@"); at >= 0 {
 			workspacePattern = strings.TrimSpace(raw[:at])
 			projectPattern = strings.TrimSpace(raw[at+1:])
+			if workspacePattern == "" || projectPattern == "" {
+				return nil, fmt.Errorf("workspace target %q must include workspace and project: workspace/<workspace>@<project>", raw)
+			}
 		}
 		workspacePattern = strings.ToLower(workspacePattern)
 		projectPattern = strings.ToLower(projectPattern)
@@ -356,7 +363,7 @@ func newRemoveCommand(ctx context.Context, configPath *string) *cobra.Command {
 		Long: strings.Join([]string{
 			"Targets:",
 			"- container/<name-or-id>",
-			"- workspace/<workspace>@<project> (project optional)",
+			"- workspace/<workspace>@<project>",
 			"- project/<project>",
 			"- all (requires --yes)",
 		}, "\n"),
@@ -446,7 +453,7 @@ func newSignalCommand(ctx context.Context, configPath *string, name string, sig 
 			"Targets:",
 			"- lease/<id>",
 			"- container/<name-or-id>",
-			"- workspace/<workspace>@<project> (project optional)",
+			"- workspace/<workspace>@<project>",
 			"- project/<project>",
 			"- all (requires --yes)",
 		}, "\n"),
@@ -566,7 +573,7 @@ func completeManagedTargets(configPath *string, includeLeases bool, runningOnly 
 		}
 
 		candidates = append(candidates, managedTargetSuggestions(state, includeLeases, runningOnly)...)
-		return filterCompletionCandidates(candidates, toComplete), cobra.ShellCompDirectiveNoFileComp
+		return filterCompletionCandidates(candidates, args, toComplete), cobra.ShellCompDirectiveNoFileComp
 	}
 }
 
@@ -591,9 +598,6 @@ func managedTargetSuggestions(state managedState, includeLeases bool, runningOnl
 		if project != "" {
 			add("project/" + project)
 		}
-		if workspace != "" {
-			add("workspace/" + workspace)
-		}
 		if workspace != "" && project != "" {
 			add(fmt.Sprintf("workspace/%s@%s", workspace, project))
 		}
@@ -613,8 +617,15 @@ func managedTargetSuggestions(state managedState, includeLeases bool, runningOnl
 	return out
 }
 
-func filterCompletionCandidates(candidates []string, toComplete string) []string {
+func filterCompletionCandidates(candidates []string, args []string, toComplete string) []string {
 	prefix := strings.TrimSpace(toComplete)
+	if basePrefix, suffixPrefix, ok := splitWordbreakAtContext(args, toComplete); ok {
+		return filterCompletionSuffixCandidates(candidates, basePrefix, suffixPrefix)
+	}
+	return filterCompletionCandidatesByPrefix(candidates, prefix)
+}
+
+func filterCompletionCandidatesByPrefix(candidates []string, prefix string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(candidates))
 	for _, c := range candidates {
@@ -631,8 +642,102 @@ func filterCompletionCandidates(candidates []string, toComplete string) []string
 		seen[c] = struct{}{}
 		out = append(out, c)
 	}
+	out = dropNamespacePlaceholders(out)
 	sort.Strings(out)
 	return out
+}
+
+func dropNamespacePlaceholders(candidates []string) []string {
+	namespaceHasSpecific := map[string]bool{}
+	for _, candidate := range candidates {
+		for _, namespace := range []string{"container/", "workspace/", "project/", "lease/"} {
+			if strings.HasPrefix(candidate, namespace) && candidate != namespace {
+				namespaceHasSpecific[namespace] = true
+			}
+		}
+	}
+	if len(namespaceHasSpecific) == 0 {
+		return candidates
+	}
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if namespaceHasSpecific[candidate] {
+			continue
+		}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func filterCompletionSuffixCandidates(candidates []string, basePrefix string, suffixPrefix string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" || !strings.HasPrefix(c, basePrefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(c, basePrefix)
+		if suffix == "" {
+			continue
+		}
+		if suffixPrefix != "" && !strings.HasPrefix(suffix, suffixPrefix) {
+			continue
+		}
+		if _, ok := seen[suffix]; ok {
+			continue
+		}
+		seen[suffix] = struct{}{}
+		out = append(out, suffix)
+	}
+	if len(out) == 0 {
+		return filterCompletionCandidatesByPrefix(candidates, suffixPrefix)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func splitWordbreakAtContext(args []string, toComplete string) (basePrefix string, suffixPrefix string, ok bool) {
+	if strings.Contains(toComplete, "@") {
+		return "", "", false
+	}
+	line := strings.TrimSpace(os.Getenv("COMP_LINE"))
+	if line == "" {
+		return "", "", false
+	}
+	pointText := strings.TrimSpace(os.Getenv("COMP_POINT"))
+	if pointText != "" {
+		if point, err := strconv.Atoi(pointText); err == nil {
+			if point >= 0 && point <= len(line) {
+				line = line[:point]
+			}
+		}
+	}
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	current := fields[len(fields)-1]
+	if current == "" || !strings.Contains(current, "@") {
+		return "", "", false
+	}
+	atIdx := strings.LastIndex(current, "@")
+	if atIdx <= 0 {
+		return "", "", false
+	}
+	basePrefix = current[:atIdx+1]
+	suffixPrefix = current[atIdx+1:]
+	if strings.TrimSpace(toComplete) != suffixPrefix {
+		return "", "", false
+	}
+	if len(args) > 0 {
+		arg := strings.TrimSpace(args[0])
+		baseNoAt := strings.TrimSuffix(basePrefix, "@")
+		if arg != baseNoAt && arg != basePrefix {
+			return "", "", false
+		}
+	}
+	return basePrefix, suffixPrefix, true
 }
 
 type managedState struct {
@@ -980,11 +1085,17 @@ func selectManagedTarget(state managedState, target string) (managedSelection, e
 
 	if strings.HasPrefix(target, "workspace/") {
 		raw := strings.TrimPrefix(target, "workspace/")
+		if strings.TrimSpace(raw) != "" && !strings.Contains(raw, "@") {
+			return managedSelection{}, fmt.Errorf("workspace target %q must include project: workspace/<workspace>@<project>", raw)
+		}
 		workspace := raw
 		project := ""
 		if at := strings.Index(raw, "@"); at >= 0 {
 			workspace = raw[:at]
 			project = raw[at+1:]
+			if strings.TrimSpace(workspace) == "" || strings.TrimSpace(project) == "" {
+				return managedSelection{}, fmt.Errorf("workspace target %q must include workspace and project: workspace/<workspace>@<project>", raw)
+			}
 		}
 		workspace = identity.NormalizeLabel(workspace)
 		project = identity.NormalizeLabel(project)
