@@ -38,7 +38,7 @@ func TestPrintManagedStateIncludesDomainWithoutOwnershipField(t *testing.T) {
 
 	var out bytes.Buffer
 	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, nil, false, managedStatePrintOptions{GroupByProject: true})
-	if !strings.Contains(out.String(), "workspace/feat-1@comment-slayer domain=feat-1.cs") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/feat-1 domain=feat-1.cs") {
 		t.Fatalf("output missing workspace domain:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "ownership=") {
@@ -65,10 +65,10 @@ func TestPrintManagedStateShowsContainerCountsForMultiWorkspace(t *testing.T) {
 	if !strings.Contains(out.String(), "project/comment-slayer containers=3") {
 		t.Fatalf("output missing project container count:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "workspace/feat-1@comment-slayer domain=feat-1.cs containers=2") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/feat-1 domain=feat-1.cs containers=2") {
 		t.Fatalf("output missing workspace feat-1 container count:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "workspace/feat-2@comment-slayer domain=feat-2.cs containers=1") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/feat-2 domain=feat-2.cs containers=1") {
 		t.Fatalf("output missing workspace feat-2 container count:\n%s", out.String())
 	}
 }
@@ -108,7 +108,7 @@ func TestManagedStateDisplayConfigUsesDaemonReconcileConfig(t *testing.T) {
 	}}}
 	var out bytes.Buffer
 	printManagedStateWithRuntimeDomainsTo(&out, displayCfg, state, nil, false, managedStatePrintOptions{GroupByProject: true})
-	if !strings.Contains(out.String(), "workspace/feat-1@comment-slayer domain=feat-1.cs") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/feat-1 domain=feat-1.cs") {
 		t.Fatalf("output missing daemon-reconcile domain:\n%s", out.String())
 	}
 }
@@ -225,7 +225,7 @@ func TestManagedStateDisplayConfigRecoversAfterReconcileRefresh(t *testing.T) {
 	}}}
 	var out bytes.Buffer
 	printManagedStateWithRuntimeDomainsTo(&out, displayCfg, state, nil, false, managedStatePrintOptions{GroupByProject: true})
-	if !strings.Contains(out.String(), "workspace/feat-1@comment-slayer domain=feat-1.cs") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/feat-1 domain=feat-1.cs") {
 		t.Fatalf("output should use refreshed runtime domain:\n%s", out.String())
 	}
 }
@@ -265,7 +265,7 @@ func TestManagedStateDisplayConfigAvoidsConfigLeakWhenRuntimeConfigMissing(t *te
 	}}}
 	var out bytes.Buffer
 	printManagedStateWithRuntimeDomainsTo(&out, displayCfg, state, nil, false, managedStatePrintOptions{GroupByProject: true})
-	if !strings.Contains(out.String(), "workspace/feat-1@comment-slayer domain=n/a") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/feat-1 domain=n/a") {
 		t.Fatalf("output should avoid leaking local config domain:\n%s", out.String())
 	}
 }
@@ -323,10 +323,10 @@ func TestPrintManagedStateUsesWorkspaceDomainsFromRuntimeState(t *testing.T) {
 
 	var out bytes.Buffer
 	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, runtimeDomains, true, managedStatePrintOptions{GroupByProject: true})
-	if !strings.Contains(out.String(), "workspace/master@breadstick domain=master.bs") {
+	if !strings.Contains(out.String(), "workspace/breadstick/master domain=master.bs") {
 		t.Fatalf("output missing breadstick runtime domain:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "workspace/master@comment-slayer domain=master.cs") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/master domain=master.cs") {
 		t.Fatalf("output missing comment-slayer runtime domain:\n%s", out.String())
 	}
 }
@@ -347,10 +347,10 @@ func TestPrintManagedStateMarksDomainNAWhenRuntimeAuthoritativeAndMissing(t *tes
 
 	var out bytes.Buffer
 	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, runtimeDomains, true, managedStatePrintOptions{GroupByProject: true})
-	if !strings.Contains(out.String(), "workspace/master@breadstick domain=master.bs") {
+	if !strings.Contains(out.String(), "workspace/breadstick/master domain=master.bs") {
 		t.Fatalf("output missing breadstick runtime domain:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "workspace/master@comment-slayer domain=n/a") {
+	if !strings.Contains(out.String(), "workspace/comment-slayer/master domain=n/a") {
 		t.Fatalf("output should not leak fallback suffix for missing runtime domain:\n%s", out.String())
 	}
 }
@@ -358,12 +358,12 @@ func TestPrintManagedStateMarksDomainNAWhenRuntimeAuthoritativeAndMissing(t *tes
 func TestParsePSFilterAcceptsWorkspaceTarget(t *testing.T) {
 	t.Parallel()
 
-	target, err := parsePSFilter([]string{"workspace/feat-1@breadstick"})
+	target, err := parsePSFilter([]string{"workspace/breadstick/feat-1"})
 	if err != nil {
 		t.Fatalf("parsePSFilter: %v", err)
 	}
-	if target != "workspace/feat-1@breadstick" {
-		t.Fatalf("target = %q, want %q", target, "workspace/feat-1@breadstick")
+	if target != "workspace/breadstick/feat-1" {
+		t.Fatalf("target = %q, want %q", target, "workspace/breadstick/feat-1")
 	}
 }
 
@@ -371,8 +371,8 @@ func TestFilterManagedStateWorkspaceRequiresProject(t *testing.T) {
 	t.Parallel()
 
 	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "feat-1-api-1", Project: "breadstick", Workspace: "feat-1", Running: true}}}
-	if _, err := filterManagedState(state, "workspace/feat-1"); err == nil {
-		t.Fatal("expected workspace target without @project to fail")
+	if _, err := filterManagedState(state, "workspace/feat-1", targetMatchExact); err == nil {
+		t.Fatal("expected workspace target without project/workspace segments to fail")
 	}
 }
 
@@ -386,7 +386,7 @@ func TestFilterManagedStateProjectPrefixMatch(t *testing.T) {
 		{ID: "d", Name: "other-api-1", Service: "api", Project: "comment-slayer", Workspace: "master", Running: true},
 	}}
 
-	filtered, err := filterManagedState(state, "project/bread")
+	filtered, err := filterManagedState(state, "workspace/bread", targetMatchPrefix)
 	if err != nil {
 		t.Fatalf("filterManagedState: %v", err)
 	}
@@ -408,20 +408,20 @@ func TestFilterManagedStateProjectShorthandAndSlashMatchAllProjects(t *testing.T
 		{ID: "b", Name: "master-api-1", Service: "api", Project: "comment-slayer", Workspace: "master", Running: true},
 	}}
 
-	filteredBare, err := filterManagedState(state, "project")
+	filteredBare, err := filterManagedState(state, "workspace", targetMatchExact)
 	if err != nil {
-		t.Fatalf("filterManagedState(project): %v", err)
+		t.Fatalf("filterManagedState(workspace): %v", err)
 	}
 	if len(filteredBare.Containers) != 2 {
 		t.Fatalf("project shorthand container count = %d, want 2", len(filteredBare.Containers))
 	}
 
-	filteredSlash, err := filterManagedState(state, "project/")
+	filteredSlash, err := filterManagedState(state, "workspace/", targetMatchExact)
 	if err != nil {
-		t.Fatalf("filterManagedState(project/): %v", err)
+		t.Fatalf("filterManagedState(workspace/): %v", err)
 	}
 	if len(filteredSlash.Containers) != 2 {
-		t.Fatalf("project/ container count = %d, want 2", len(filteredSlash.Containers))
+		t.Fatalf("workspace/ container count = %d, want 2", len(filteredSlash.Containers))
 	}
 }
 
@@ -438,16 +438,16 @@ func TestPrintManagedStateProjectFilterStyle(t *testing.T) {
 	}}
 
 	var out bytes.Buffer
-	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, nil, false, psFilterDisplayOptions("project/breadstick", state))
+	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, nil, false, psFilterDisplayOptions("workspace/breadstick", state))
 	if strings.Contains(out.String(), "project/breadstick containers=") {
-		t.Fatalf("project-group heading should not be present for project filter:\n%s", out.String())
+		t.Fatalf("project-group heading should not be present for workspace project filter:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "workspace/feat-1@breadstick domain=feat-1.test containers=2") {
+	if !strings.Contains(out.String(), "workspace/breadstick/feat-1 domain=feat-1.test containers=2") {
 		t.Fatalf("workspace line should include container count:\n%s", out.String())
 	}
 }
 
-func TestPrintManagedStateProjectRootFilterShowsProjectTreeWhenMultipleProjects(t *testing.T) {
+func TestPrintManagedStateWorkspaceRootFilterShowsProjectTreeWhenMultipleProjects(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
@@ -459,7 +459,7 @@ func TestPrintManagedStateProjectRootFilterShowsProjectTreeWhenMultipleProjects(
 	}}
 
 	var out bytes.Buffer
-	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, nil, false, psFilterDisplayOptions("project", state))
+	printManagedStateWithRuntimeDomainsTo(&out, cfg, state, nil, false, psFilterDisplayOptions("workspace", state))
 	if !strings.Contains(out.String(), "project/breadstick containers=1") {
 		t.Fatalf("project heading missing for breadstick:\n%s", out.String())
 	}

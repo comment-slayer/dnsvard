@@ -525,8 +525,6 @@ func completionUninstallRCPaths(shell string, home string, rcPaths []string) []s
 }
 
 const bashCompletionCompatShim = `# dnsvard: fallback helper for bash 3.x sessions without bash-completion runtime.
-# keep @ inside a completion token (workspace/<name>@<project>)
-COMP_WORDBREAKS=${COMP_WORDBREAKS//[@]/}
 if ! declare -F _get_comp_words_by_ref >/dev/null 2>&1; then
 _get_comp_words_by_ref()
 {

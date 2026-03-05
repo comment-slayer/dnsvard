@@ -21,8 +21,7 @@ func TestManagedTargetSuggestionsIncludeProjectWorkspaceAndLease(t *testing.T) {
 	want := []string{
 		"container/feat-1-api-1",
 		"lease/run-a1",
-		"project/project-name",
-		"workspace/feat-1@project-name",
+		"workspace/project-name/feat-1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("managedTargetSuggestions = %#v, want %#v", got, want)
@@ -42,8 +41,7 @@ func TestManagedTargetSuggestionsRunningOnlyFiltersStopped(t *testing.T) {
 	got := managedTargetSuggestions(state, false, true)
 	want := []string{
 		"container/running-api",
-		"project/project-name",
-		"workspace/feat-1@project-name",
+		"workspace/project-name/feat-1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("managedTargetSuggestions runningOnly = %#v, want %#v", got, want)
@@ -58,8 +56,8 @@ func TestManagedTargetSuggestionsRunningOnlyFiltersStopped(t *testing.T) {
 func TestFilterCompletionCandidatesByPrefixAndDedupe(t *testing.T) {
 	t.Parallel()
 
-	got := filterCompletionCandidates([]string{"all", "project/foo", "project/foo", "workspace/bar", "container/api"}, nil, "project/")
-	want := []string{"project/foo"}
+	got := filterCompletionCandidates([]string{"all", "workspace/foo", "workspace/foo", "workspace/bar", "container/api"}, "workspace/f")
+	want := []string{"workspace/foo"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filterCompletionCandidates = %#v, want %#v", got, want)
 	}
@@ -68,71 +66,29 @@ func TestFilterCompletionCandidatesByPrefixAndDedupe(t *testing.T) {
 func TestFilterCompletionCandidatesDropsNamespacePlaceholderWhenSpecificExists(t *testing.T) {
 	t.Parallel()
 
-	got := filterCompletionCandidates([]string{"workspace/", "workspace/worker-duplication@comment-slayer"}, nil, "work")
-	want := []string{"workspace/worker-duplication@comment-slayer"}
+	got := filterCompletionCandidates([]string{"workspace/", "workspace/comment-slayer/worker-duplication"}, "work")
+	want := []string{"workspace/comment-slayer/worker-duplication"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filterCompletionCandidates namespace placeholder = %#v, want %#v", got, want)
 	}
 }
 
-func TestFilterCompletionCandidatesAtWordbreakReturnsSuffix(t *testing.T) {
-	line := "dnsvard rm workspace/anonymize-deletions@com"
-	t.Setenv("COMP_LINE", line)
-	t.Setenv("COMP_POINT", "44")
+func TestManagedTargetSuggestionsAddsProjectScopeOnlyWhenProjectHasMultipleWorkspaces(t *testing.T) {
+	t.Parallel()
 
-	got := filterCompletionCandidates([]string{
-		"workspace/anonymize-deletions@comment-slayer",
-		"workspace/other@comment-slayer",
-	}, []string{"workspace/anonymize-deletions"}, "com")
-	want := []string{"comment-slayer"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("filterCompletionCandidates wordbreak = %#v, want %#v", got, want)
+	state := managedState{Containers: []dockerContainer{
+		{ID: "1", Name: "feat-api", Project: "comment-slayer", Workspace: "feat-1", Running: true},
+		{ID: "2", Name: "fix-api", Project: "comment-slayer", Workspace: "fix-1", Running: true},
+	}}
+	got := managedTargetSuggestions(state, false, true)
+	want := []string{
+		"container/feat-api",
+		"container/fix-api",
+		"workspace/comment-slayer",
+		"workspace/comment-slayer/feat-1",
+		"workspace/comment-slayer/fix-1",
 	}
-}
-
-func TestFilterCompletionCandidatesBashShimWordbreakEmptySuffix(t *testing.T) {
-	line := "dnsvard rm workspace/anonymize-deletions@"
-	t.Setenv("COMP_LINE", line)
-	t.Setenv("COMP_POINT", "41")
-
-	got := filterCompletionCandidates([]string{
-		"workspace/anonymize-deletions@comment-slayer",
-		"workspace/anonymize-deletions@other-project",
-	}, []string{"workspace/anonymize-deletions"}, "")
-	want := []string{"comment-slayer", "other-project"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("filterCompletionCandidates bash shim empty suffix = %#v, want %#v", got, want)
-	}
-}
-
-func TestFilterCompletionCandidatesAtWordbreakIgnoresMismatchedContext(t *testing.T) {
-	line := "dnsvard rm workspace/anonymize-deletions@"
-	t.Setenv("COMP_LINE", line)
-	t.Setenv("COMP_POINT", "41")
-
-	got := filterCompletionCandidates([]string{"workspace/anonymize-deletions@comment-slayer"}, []string{"workspace/other"}, "")
-	want := []string{"workspace/anonymize-deletions@comment-slayer"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("filterCompletionCandidates mismatch = %#v, want %#v", got, want)
-	}
-}
-
-func TestFilterCompletionCandidatesAtWordbreakAcceptsArgWithTrailingAt(t *testing.T) {
-	line := "dnsvard rm workspace/anonymize-deletions@"
-	t.Setenv("COMP_LINE", line)
-	t.Setenv("COMP_POINT", "41")
-
-	got := filterCompletionCandidates([]string{"workspace/anonymize-deletions@comment-slayer"}, []string{"workspace/anonymize-deletions@"}, "")
-	want := []string{"comment-slayer"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("filterCompletionCandidates trailing @ arg = %#v, want %#v", got, want)
-	}
-}
-
-func TestSplitWordbreakAtContextWithoutEnv(t *testing.T) {
-	t.Setenv("COMP_LINE", "")
-	t.Setenv("COMP_POINT", "")
-	if _, _, ok := splitWordbreakAtContext(nil, "com"); ok {
-		t.Fatal("expected splitWordbreakAtContext to be disabled without shell env")
+		t.Fatalf("managedTargetSuggestions = %#v, want %#v", got, want)
 	}
 }

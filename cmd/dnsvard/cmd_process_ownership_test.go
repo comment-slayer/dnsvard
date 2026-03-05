@@ -51,7 +51,7 @@ func TestSelectManagedTargetAllUsesAllRunningContainers(t *testing.T) {
 		},
 	}
 
-	sel, err := selectManagedTarget(state, "all")
+	sel, err := selectManagedTarget(state, "all", targetMatchExact)
 	if err != nil {
 		t.Fatalf("selectManagedTarget returned error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestSelectManagedTargetAllowsComposeOnlyContainerForDestructiveAction(t *te
 		Containers: []dockerContainer{{ID: "compose-1", Name: "compose-api", Running: true}},
 	}
 
-	sel, err := selectManagedTarget(state, "container/compose-api")
+	sel, err := selectManagedTarget(state, "container/compose-api", targetMatchExact)
 	if err != nil {
 		t.Fatalf("selectManagedTarget returned error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestSelectContainerTargetIncludesAllInMixedWorkspace(t *testing.T) {
 		{ID: "owned-1", Name: "owned-api", Project: "proj", Workspace: "ws"},
 		{ID: "compose-1", Name: "compose-api", Project: "proj", Workspace: "ws"},
 	}
-	selected, err := selectContainerTarget(containers, "workspace/ws@proj")
+	selected, err := selectContainerTarget(containers, "workspace/proj/ws", targetMatchExact)
 	if err != nil {
 		t.Fatalf("selectContainerTarget returned error: %v", err)
 	}
@@ -95,11 +95,11 @@ func TestSelectContainerTargetIncludesAllInMixedWorkspace(t *testing.T) {
 	}
 }
 
-func TestSelectContainerTargetAllowsComposeOnlyScope(t *testing.T) {
+func TestSelectContainerTargetAllowsComposeOnlyProjectScope(t *testing.T) {
 	t.Parallel()
 
 	containers := []dockerContainer{{ID: "compose-1", Name: "compose-api", Project: "proj", Workspace: "ws"}}
-	selected, err := selectContainerTarget(containers, "project/proj")
+	selected, err := selectContainerTarget(containers, "workspace/proj", targetMatchExact)
 	if err != nil {
 		t.Fatalf("selectContainerTarget returned error: %v", err)
 	}
@@ -108,14 +108,14 @@ func TestSelectContainerTargetAllowsComposeOnlyScope(t *testing.T) {
 	}
 }
 
-func TestSelectContainerTargetSupportsProjectPrefixPattern(t *testing.T) {
+func TestSelectContainerTargetSupportsWorkspacePrefixPattern(t *testing.T) {
 	t.Parallel()
 
 	containers := []dockerContainer{
 		{ID: "a", Name: "feat-1-api", Project: "breadstick", Workspace: "feat-1"},
 		{ID: "b", Name: "master-api", Project: "comment-slayer", Workspace: "master"},
 	}
-	selected, err := selectContainerTarget(containers, "project/bread")
+	selected, err := selectContainerTarget(containers, "workspace/bread", targetMatchPrefix)
 	if err != nil {
 		t.Fatalf("selectContainerTarget returned error: %v", err)
 	}
@@ -124,44 +124,69 @@ func TestSelectContainerTargetSupportsProjectPrefixPattern(t *testing.T) {
 	}
 }
 
-func TestSelectContainerTargetSupportsProjectShorthand(t *testing.T) {
+func TestSelectContainerTargetSupportsWorkspaceFullPathRegex(t *testing.T) {
 	t.Parallel()
 
 	containers := []dockerContainer{
 		{ID: "a", Name: "feat-1-api", Project: "breadstick", Workspace: "feat-1"},
 		{ID: "b", Name: "master-api", Project: "comment-slayer", Workspace: "master"},
 	}
-	selected, err := selectContainerTarget(containers, "project")
+	selected, err := selectContainerTarget(containers, "workspace/comment-slayer/ma.*", targetMatchRegex)
 	if err != nil {
-		t.Fatalf("selectContainerTarget(project) returned error: %v", err)
+		t.Fatalf("selectContainerTarget returned error: %v", err)
 	}
-	if len(selected) != 2 {
-		t.Fatalf("selected(project) = %#v", selected)
-	}
-
-	selectedSlash, err := selectContainerTarget(containers, "project/")
-	if err != nil {
-		t.Fatalf("selectContainerTarget(project/) returned error: %v", err)
-	}
-	if len(selectedSlash) != 2 {
-		t.Fatalf("selected(project/) = %#v", selectedSlash)
+	if len(selected) != 1 || selected[0].ID != "b" {
+		t.Fatalf("selected = %#v", selected)
 	}
 }
 
-func TestSelectContainerTargetRequiresExplicitWorkspaceProject(t *testing.T) {
+func TestSelectContainerTargetRegexMatchesWholeWorkspacePath(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{{ID: "b", Name: "master-api", Project: "comment-slayer", Workspace: "master"}}
+	if _, err := selectContainerTarget(containers, "workspace/comment-slayer/ma", targetMatchRegex); err == nil {
+		t.Fatal("expected whole-path regex to reject partial workspace suffix match")
+	}
+}
+
+func TestSelectContainerTargetSupportsWorkspaceShorthand(t *testing.T) {
+	t.Parallel()
+
+	containers := []dockerContainer{
+		{ID: "a", Name: "feat-1-api", Project: "breadstick", Workspace: "feat-1"},
+		{ID: "b", Name: "master-api", Project: "comment-slayer", Workspace: "master"},
+	}
+	selected, err := selectContainerTarget(containers, "workspace", targetMatchExact)
+	if err != nil {
+		t.Fatalf("selectContainerTarget(workspace) returned error: %v", err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("selected(workspace) = %#v", selected)
+	}
+
+	selectedSlash, err := selectContainerTarget(containers, "workspace/", targetMatchExact)
+	if err != nil {
+		t.Fatalf("selectContainerTarget(workspace/) returned error: %v", err)
+	}
+	if len(selectedSlash) != 2 {
+		t.Fatalf("selected(workspace/) = %#v", selectedSlash)
+	}
+}
+
+func TestSelectContainerTargetRequiresWorkspacePathToStartWithProject(t *testing.T) {
 	t.Parallel()
 
 	containers := []dockerContainer{{ID: "a", Name: "feat-1-api", Project: "comment-slayer", Workspace: "feat-1"}}
-	if _, err := selectContainerTarget(containers, "workspace/feat-1"); err == nil {
-		t.Fatal("expected workspace target without @project to fail")
+	if _, err := selectContainerTarget(containers, "workspace/feat-1", targetMatchExact); err == nil {
+		t.Fatal("expected workspace target without project/workspace segments to fail")
 	}
 }
 
-func TestSelectManagedTargetRequiresExplicitWorkspaceProject(t *testing.T) {
+func TestSelectManagedTargetRequiresWorkspacePathToStartWithProject(t *testing.T) {
 	t.Parallel()
 
 	state := managedState{Containers: []dockerContainer{{ID: "a", Name: "feat-1-api", Project: "comment-slayer", Workspace: "feat-1", Running: true}}}
-	if _, err := selectManagedTarget(state, "workspace/feat-1"); err == nil {
-		t.Fatal("expected managed workspace target without @project to fail")
+	if _, err := selectManagedTarget(state, "workspace/feat-1", targetMatchExact); err == nil {
+		t.Fatal("expected managed workspace target without project/workspace segments to fail")
 	}
 }
