@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-output_path="${1:-dist/release-notes.md}"
+output_path="${1:-.tmp/release-notes.md}"
 current_tag="${2:-${GITHUB_REF_NAME:-}}"
 
 if [[ -z "${current_tag}" ]]; then
