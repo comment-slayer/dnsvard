@@ -36,14 +36,14 @@ jobs:
           repositories: homebrew-tap
 
       - name: Generate release notes
-        run: ./scripts/generate-release-notes.sh .tmp/release-notes.md
+        run: ./scripts/generate-release-notes.sh "$RUNNER_TEMP/dnsvard-release-notes.md"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --parallelism=4 --release-notes .tmp/release-notes.md
+          args: release --clean --parallelism=4 --release-notes ${{ runner.temp }}/dnsvard-release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-app-token.outputs.token }}
