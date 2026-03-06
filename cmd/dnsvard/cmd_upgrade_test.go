@@ -156,6 +156,34 @@ func TestCompareSemver(t *testing.T) {
 	}
 }
 
+func TestSameResolvedVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		current  string
+		resolved string
+		want     bool
+	}{
+		{name: "exact match", current: "v0.3.0", resolved: "v0.3.0", want: true},
+		{name: "build metadata treated same", current: "v0.3.0+local", resolved: "v0.3.0", want: true},
+		{name: "different patch", current: "v0.3.0", resolved: "v0.3.1", want: false},
+		{name: "non semver must match exactly", current: "dev", resolved: "v0.3.0", want: false},
+		{name: "blank current", current: "", resolved: "v0.3.0", want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := sameResolvedVersion(tc.current, tc.resolved)
+			if got != tc.want {
+				t.Fatalf("sameResolvedVersion(%q, %q) = %t, want %t", tc.current, tc.resolved, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExpectedChecksumForArtifact(t *testing.T) {
 	t.Parallel()
 
