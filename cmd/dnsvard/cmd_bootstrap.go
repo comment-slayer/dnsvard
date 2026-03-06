@@ -152,7 +152,7 @@ func runBootstrapTo(out io.Writer, errOut io.Writer, options bootstrapRunOptions
 	if err := ensureDNSListenAvailable(cfg.DNSListen); err != nil {
 		fmt.Fprintf(out, "Detected existing listener on %s; attempting clean restart...\n", cfg.DNSListen)
 		if stopErr := stopExistingDaemon(cfg, plat); stopErr != nil {
-			logger.Warn("bootstrap stop-existing daemon warning", "error", stopErr)
+			fmt.Fprintf(errOut, "warning: failed to stop existing daemon during bootstrap: %v\n", stopErr)
 		}
 		if waitErr := waitForDNSListenAvailable(cfg.DNSListen, 3*time.Second); waitErr != nil {
 			return waitErr
@@ -272,7 +272,7 @@ func runBootstrapTo(out io.Writer, errOut io.Writer, options bootstrapRunOptions
 		fmt.Fprintf(out, "- loopback agent: %s\n", loopbackPath)
 	}
 	if err := writeBootstrapStateVersion(cfg.StateDir, bootstrapStateVersion); err != nil {
-		logger.Warn("write bootstrap state failed", "error", err)
+		fmt.Fprintf(errOut, "warning: failed to persist bootstrap state version: %v\n", err)
 	}
 
 	if verbose {
@@ -405,10 +405,10 @@ func runUninstallTo(out io.Writer, logger *logx.Logger, cfg config.Config, plat 
 	}
 
 	if err := stopExistingDaemon(cfg, plat); err != nil {
-		logger.Warn("daemon stop during uninstall failed", "error", err)
+		fmt.Fprintf(out, "warning: daemon stop during uninstall failed: %v\n", err)
 	}
 	if err := stopAnyForegroundDaemons(); err != nil {
-		logger.Warn("foreground daemon stop sweep failed", "error", err)
+		fmt.Fprintf(out, "warning: foreground daemon stop sweep failed: %v\n", err)
 	}
 	auditPrivilegedOperation(logger, "uninstall_platform_daemon", "state_dir", cfg.StateDir)
 	if err := plat.UninstallDaemon(); err != nil {
@@ -416,39 +416,39 @@ func runUninstallTo(out io.Writer, logger *logx.Logger, cfg config.Config, plat 
 	}
 	auditPrivilegedOperation(logger, "uninstall_loopback_agent", "state_dir", cfg.StateDir)
 	if err := plat.UninstallLoopbackAgent(); err != nil {
-		logger.Warn("loopback agent uninstall failed", "error", err)
+		fmt.Fprintf(out, "warning: loopback agent uninstall failed: %v\n", err)
 	}
 	managed, err := plat.ListManagedResolvers()
 	if err != nil {
-		logger.Warn("managed resolver list failed during uninstall", "error", err)
+		fmt.Fprintf(out, "warning: managed resolver list failed during uninstall: %v\n", err)
 	} else {
 		for _, domain := range managed {
 			spec, specErr := resolverSpecFromListen(cfg, domain)
 			if specErr != nil {
-				logger.Warn("skip resolver removal due to invalid spec", "domain", domain, "error", specErr)
+				fmt.Fprintf(out, "warning: skipped resolver removal for %s due to invalid spec: %v\n", domain, specErr)
 				continue
 			}
 			if removeErr := plat.RemoveResolver(spec); removeErr != nil {
-				logger.Warn("resolver removal during uninstall failed", "domain", domain, "error", removeErr)
+				fmt.Fprintf(out, "warning: resolver removal during uninstall failed for %s: %v\n", domain, removeErr)
 			}
 		}
 	}
 	if err := daemon.RemovePID(cfg.StateDir); err != nil {
-		logger.Warn("failed removing pid file", "error", err)
+		fmt.Fprintf(out, "warning: failed removing pid file: %v\n", err)
 	}
 	if err := os.Remove(bootstrapStatePath(cfg.StateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		logger.Warn("bootstrap state cleanup failed", "error", err)
+		fmt.Fprintf(out, "warning: bootstrap state cleanup failed: %v\n", err)
 	}
 	if err := maybeRevokePrivilegedHTTPBindCapability(logger, cfg.StateDir); err != nil {
-		logger.Warn("http privileged bind capability cleanup failed", "error", err)
+		fmt.Fprintf(out, "warning: HTTP privileged bind capability cleanup failed: %v\n", err)
 	}
 	safeStateDir, safeErr := config.SafeStateDirPath(cfg.StateDir)
 	if safeErr != nil {
-		logger.Warn("state dir cleanup skipped: unsafe state_dir", "path", cfg.StateDir, "error", safeErr)
+		fmt.Fprintf(out, "warning: state dir cleanup skipped for unsafe path %s: %v\n", cfg.StateDir, safeErr)
 		fmt.Fprintf(out, "- skipped unsafe state directory removal: %s\n", cfg.StateDir)
 		fmt.Fprintln(out, "- fix: set `state_dir` under your home directory ending with /dnsvard, then rerun uninstall")
 	} else if err := os.RemoveAll(safeStateDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		logger.Warn("state dir cleanup failed", "path", safeStateDir, "error", err)
+		fmt.Fprintf(out, "warning: state dir cleanup failed for %s: %v\n", safeStateDir, err)
 	} else {
 		auditPrivilegedOperation(logger, "uninstall_remove_state_dir", "path", safeStateDir)
 	}
@@ -464,12 +464,12 @@ func runUninstallTo(out io.Writer, logger *logx.Logger, cfg config.Config, plat 
 			fmt.Fprintf(out, "- preserved global config: %s\n", globalConfigPath)
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		logger.Warn("global config stat failed during uninstall", "path", globalConfigPath, "error", statErr)
+		fmt.Fprintf(out, "warning: could not stat global config %s during uninstall: %v\n", globalConfigPath, statErr)
 	}
 
 	exePath, exeErr := os.Executable()
 	if exeErr != nil {
-		logger.Warn("could not resolve executable path during uninstall", "error", exeErr)
+		fmt.Fprintf(out, "warning: could not resolve executable path during uninstall: %v\n", exeErr)
 		return nil
 	}
 	exePath = filepath.Clean(exePath)

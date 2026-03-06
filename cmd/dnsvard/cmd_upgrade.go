@@ -20,8 +20,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/comment-slayer/dnsvard/internal/logx"
 )
 
 func newUpgradeCommand(_ context.Context, appVersion string) *cobra.Command {
@@ -166,10 +164,6 @@ func runUpgrade(currentVersion string, targetVersion string, allowDowngrade bool
 	}
 
 	fmt.Printf("upgrading dnsvard (%s -> %s) into %s\n", strings.TrimSpace(currentVersion), resolvedVersion, installDir)
-
-	if logger, err := logx.New("info"); err == nil {
-		logger.Info("upgrade complete", "version", resolvedVersion, "install_dir", installDir)
-	}
 	fmt.Printf("upgrade complete\n")
 	return nil
 }
