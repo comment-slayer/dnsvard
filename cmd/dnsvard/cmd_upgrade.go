@@ -133,6 +133,10 @@ func runUpgrade(currentVersion string, targetVersion string, allowDowngrade bool
 			return err
 		}
 	}
+	if sameResolvedVersion(currentVersion, resolvedVersion) {
+		fmt.Printf("dnsvard already at latest version: %s\n", resolvedVersion)
+		return nil
+	}
 	archiveName, err := releaseArchiveName(resolvedVersion)
 	if err != nil {
 		return err
@@ -375,6 +379,22 @@ func parseNumericIdentifier(v string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func sameResolvedVersion(currentVersion string, resolvedVersion string) bool {
+	currentVersion = strings.TrimSpace(currentVersion)
+	resolvedVersion = strings.TrimSpace(resolvedVersion)
+	if currentVersion == "" || resolvedVersion == "" {
+		return false
+	}
+	if currentVersion == resolvedVersion {
+		return true
+	}
+	if !upgradeVersionPattern.MatchString(currentVersion) || !upgradeVersionPattern.MatchString(resolvedVersion) {
+		return false
+	}
+	cmp, err := compareSemver(currentVersion, resolvedVersion)
+	return err == nil && cmp == 0
 }
 
 func releaseArchiveName(version string) (string, error) {
