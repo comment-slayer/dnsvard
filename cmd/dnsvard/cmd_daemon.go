@@ -48,7 +48,7 @@ func runDaemonStartTo(out io.Writer, errOut io.Writer, logger *logx.Logger, cfg 
 		errOut = os.Stderr
 	}
 	if err := stopStaleDaemonProcesses(cfg, platform.New()); err != nil {
-		logger.Warn("stale daemon cleanup before start failed", "error", err)
+		fmt.Fprintf(errOut, "warning: stale daemon cleanup before start failed: %v\n", err)
 	}
 	if foreground {
 		return runDaemonForegroundTo(out, errOut, logger, cfg, configPath)

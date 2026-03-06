@@ -160,12 +160,12 @@ func newBootstrapCommand(ctx context.Context, configPath *string) *cobra.Command
 		Short: "Install and reconcile dnsvard system setup",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, logger, plat, err := loadRuntime(*configPath, true)
+			cfg, _, plat, err := loadRuntime(*configPath, true)
 			if err != nil {
 				return err
 			}
 			return runBootstrapTo(cmd.OutOrStdout(), cmd.ErrOrStderr(), bootstrapRunOptions{
-				Logger:     logger,
+				Logger:     nil,
 				Cfg:        cfg,
 				Platform:   plat,
 				ConfigPath: *configPath,
@@ -190,11 +190,11 @@ func newUninstallCommand(ctx context.Context, configPath *string) *cobra.Command
 		Short: "Remove dnsvard platform setup and managed resolvers",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, logger, plat, err := loadRuntimeForUninstall(*configPath)
+			cfg, _, plat, err := loadRuntimeForUninstall(*configPath)
 			if err != nil {
 				return err
 			}
-			return runUninstallTo(cmd.OutOrStdout(), logger, cfg, plat, removeBinary)
+			return runUninstallTo(cmd.OutOrStdout(), nil, cfg, plat, removeBinary)
 		},
 	}
 	cmd.Flags().BoolVar(&removeBinary, "remove", false, "Also remove the current dnsvard binary path")
