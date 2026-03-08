@@ -223,8 +223,8 @@ Fast workspace cleanup with zero docker-name hunting:
 
 ```bash
 dnsvard ps
-dnsvard rm -f workspace/feat-auth@myproj
-dnsvard rm -f project/myproj
+dnsvard rm -f workspace/myproj/feat-auth
+dnsvard rm -f workspace/myproj
 ```
 
 ## Hostname model
@@ -367,11 +367,8 @@ dnsvard rejects `*.local` suffixes because `.local` is reserved for mDNS/Bonjour
 
 Workload operations targets:
 
-- `lease/<id>`
-- `container/<name-or-id>`
-- `workspace/<workspace>@<project>`
-- `project/<project>`
-- `all` (requires `--yes`)
+- `ps`, `stop`, `kill`: `lease/<id>`, `container/<name-or-id>`, `workspace[/<project>[/<workspace>[/<container>]]]`, `all` (requires `--yes` for `stop`/`kill`)
+- `rm`: `container/<name-or-id>`, `workspace[/<project>[/<workspace>[/<container>]]]`, `all` (requires `--yes`)
 
 `docker_discovery_mode` values:
 
