@@ -24,7 +24,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Setup Cosign
-        uses: sigstore/cosign-installer@v4.1.0
+        uses: sigstore/cosign-installer@v4.1.1
 
       - name: Create Homebrew tap app token
         id: tap-app-token
