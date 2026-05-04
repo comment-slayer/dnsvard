@@ -3,7 +3,7 @@ module github.com/comment-slayer/dnsvard
 go 1.25.0
 
 require (
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/miekg/dns v1.1.72
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
